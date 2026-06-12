@@ -56,19 +56,28 @@ def detect_device() -> str:
 
     Returns:
         "mps" on Apple Silicon, "cuda" if NVIDIA GPU is available,
-        "cpu" otherwise. faster-whisper + CTranslate2 supports all three.
+        "cpu" otherwise.
 
     Note: detection is best-effort. We don't fail if a backend isn't
     usable; faster-whisper will surface a clearer error when transcribe()
-    is called.
+    is called. Callers should handle the case where the device the model
+    was constructed with doesn't actually work (e.g. CTranslate2 4+
+    dropped MPS support for Whisper).
     """
-    # Apple Silicon: try torch first (most reliable detection), fall back
-    # to platform check. CTranslate2 supports MPS on macOS 13+.
+    # CTranslate2 v4+ no longer supports MPS for Whisper. We still return
+    # "mps" here for backwards compatibility and discoverability, but
+    # transcribe() will fall back to CPU if MPS construction fails.
+    # Check for NVIDIA GPU via CUDA.
+    try:
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda"
+    except Exception:
+        pass
+    # Apple Silicon: report MPS (will fall back to CPU if unsupported).
     if os.uname().machine == "arm64" and os.uname().sysname == "Darwin":
         return "mps"
-    # NVIDIA CUDA: check for the env var or try ctranslate2 detection.
-    # We don't import torch to keep cold-start fast; CTranslate2 itself
-    # raises a clear error if CUDA isn't actually available.
     return "cpu"
 
 
@@ -102,10 +111,28 @@ def transcribe(
     if device is None:
         device = detect_device()
 
+    # Try the requested device first. If model construction fails (e.g.
+    # CTranslate2 4+ doesn't support MPS for Whisper), fall back to CPU.
+    # We do this by attempting construction and catching the ValueError.
     try:
         # compute_type="auto" lets CTranslate2 pick the best precision
         # for the device (int8 on CPU, float16 on GPU).
         model = WhisperModel(model_name, device=device, compute_type="auto")
+    except (ValueError, RuntimeError) as e:
+        if device != "cpu":
+            # Fall back to CPU and warn the user.
+            import warnings
+
+            warnings.warn(
+                f"Device {device!r} not supported for Whisper ({e}); falling back to 'cpu'.",
+                stacklevel=2,
+            )
+            device = "cpu"
+            model = WhisperModel(model_name, device=device, compute_type="auto")
+        else:
+            raise WhisperModelError(f"Whisper transcription failed: {e}") from e
+
+    try:
         segments_iter, _info = model.transcribe(
             str(audio_path),
             beam_size=5,

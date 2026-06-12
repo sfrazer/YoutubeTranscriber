@@ -42,6 +42,9 @@ def test_detect_device_returns_string() -> None:
     """detect_device should always return a non-empty string."""
     device = detect_device()
     assert device in ("cpu", "mps", "cuda")
+    # On this machine (Apple Silicon with no CUDA), expect mps or cpu.
+    # We don't assert on the exact value because of the device-fallback
+    # behavior in transcribe().
 
 
 # --- transcribe (mocked) ---------------------------------------------------
@@ -131,6 +134,35 @@ def test_transcribe_wraps_model_errors(tmp_path: Path) -> None:
         pytest.raises(WhisperModelError, match="model crashed"),
     ):
         transcribe(audio, model_name="tiny", device="cpu")
+
+
+def test_transcribe_falls_back_to_cpu_on_unsupported_device(tmp_path: Path) -> None:
+    """If the requested device isn't supported, fall back to CPU."""
+    audio = tmp_path / "audio.m4a"
+    audio.write_bytes(b"fake")
+
+    fake_cpu_model = MagicMock()
+    fake_cpu_model.transcribe.return_value = (_fake_segments(), _fake_info())
+
+    call_count = {"n": 0}
+
+    def fake_constructor(model_name, **kwargs):
+        call_count["n"] += 1
+        if kwargs.get("device") == "mps":
+            raise ValueError("unsupported device mps")
+        return fake_cpu_model
+
+    with (
+        patch(
+            "youtubetranscriber.transcribe.WhisperModel", side_effect=fake_constructor
+        ),
+        pytest.warns(UserWarning, match="falling back to 'cpu'"),
+    ):
+        result = transcribe(audio, model_name="tiny", device="mps")
+
+    assert len(result) == 2
+    # Should have tried mps, then cpu
+    assert call_count["n"] == 2
 
 
 def test_transcribe_raises_if_audio_missing(tmp_path: Path) -> None:
