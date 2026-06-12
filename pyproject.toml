@@ -41,6 +41,10 @@ select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
 ignore = [
     "E501",  # line length handled by formatter
 ]
+# Allow the CLI to declare forward-compat flags for future phases
+# (diarize, summarize, prefer_captions, keep_audio) that are not yet
+# consumed in the pipeline.
+per-file-ignores = { "src/youtubetranscriber/cli.py" = ["ARG", "A002"] }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
