@@ -8,6 +8,7 @@ Pure functions: extract_video_id()
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import yt_dlp
@@ -23,6 +24,21 @@ class InvalidURLError(ValueError):
 
 class AudioDownloadError(RuntimeError):
     """Raised when yt-dlp fails to download the audio."""
+
+
+@dataclass
+class DownloadResult:
+    """The result of downloading a video's audio.
+
+    Attributes:
+        path: Path to the downloaded .m4a file.
+        title: The video's title as reported by yt-dlp.
+        video_id: The 11-character YouTube video ID.
+    """
+
+    path: Path
+    title: str
+    video_id: str
 
 
 def extract_video_id(url: str) -> str:
@@ -68,10 +84,40 @@ def extract_video_id(url: str) -> str:
     raise InvalidURLError(f"Could not extract video ID from: {url!r}")
 
 
-def download_audio(url: str, output_dir: Path) -> Path:
+def get_video_info(url: str) -> DownloadResult:
+    """Fetch video metadata (title, id) without downloading the media.
+
+    Cheaper than download_audio() — useful when you want to decide
+    where to put files before committing to a download.
+
+    Raises:
+        InvalidURLError: if the URL is malformed.
+        AudioDownloadError: if yt-dlp can't extract info for the URL.
+    """
+    video_id = extract_video_id(url)
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        # Don't actually download; extract_info with download=False
+        # only fetches the metadata.
+        "skip_download": True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except DownloadError as e:
+        raise AudioDownloadError(f"yt-dlp failed to extract info for {url}: {e}") from e
+
+    title = (info or {}).get("title") or video_id
+    return_id = (info or {}).get("id") or video_id
+    return DownloadResult(path=Path(""), title=title, video_id=return_id)
+
+
+def download_audio(url: str, output_dir: Path) -> DownloadResult:
     """Download audio only from a YouTube URL to output_dir.
 
-    Returns the path to the downloaded .m4a file. The file will be named
+    Returns a DownloadResult containing the path to the .m4a file and
+    the video's title and ID. The file will be named
     "<video title> [<video_id>].m4a" by default.
 
     Raises:
@@ -105,15 +151,14 @@ def download_audio(url: str, output_dir: Path) -> Path:
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            # download() returns True on success
-            ydl.download([url])
-            # The file's actual name comes from yt-dlp's prepare_filename
-            # *before* postprocessing. We need the postprocessed name.
+            # extract_info(download=True) returns the metadata dict and
+            # triggers the download. We use this rather than ydl.download()
+            # because it gives us the title.
             info = ydl.extract_info(url, download=True)
+            title = info.get("title") or video_id
             # After FFmpegExtractAudio, the file lives at the same path
             # with .m4a extension (preferredcodec).
             base = ydl.prepare_filename(info)
-            # Strip the original extension, append .m4a
             downloaded = Path(base).with_suffix(".m4a")
     except DownloadError as e:
         raise AudioDownloadError(f"yt-dlp failed to download {url}: {e}") from e
@@ -125,6 +170,4 @@ def download_audio(url: str, output_dir: Path) -> Path:
             f"yt-dlp reported success but file not found: expected {downloaded}"
         )
 
-    # Reference video_id to keep linter happy and document the validation.
-    _ = video_id
-    return downloaded
+    return DownloadResult(path=downloaded, title=title, video_id=video_id)

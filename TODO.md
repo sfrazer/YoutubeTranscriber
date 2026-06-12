@@ -3,7 +3,13 @@
 Living document of known issues, deferred decisions, and "this works but
 isn't great yet." Read this first when resuming work.
 
-## Current phase: 1 (MVP)
+## Current phase: 1 (MVP) - title-based output dirs follow-up
+
+The MVP works. The follow-up fix changes the output directory
+naming from `<video_id>` to `<video_title>` with conflict-aware
+auto-rename.
+
+## Phase 1 status
 
 Phase 1 MVP is complete and verified. The tool can:
   - Parse YouTube URLs (8 URL shapes supported)
@@ -15,6 +21,21 @@ Phase 1 MVP is complete and verified. The tool can:
 
 Verified: transcribed 'Me at the zoo' (jNQXAC9IVRw) with tiny model,
 got the famous first words on YouTube correctly.
+
+## Title-based output dirs (this fix branch)
+
+Changes:
+  - New `paths.py` module with `sanitize_title()` and
+    `resolve_unique_dir()`
+  - `audio.py` now returns `DownloadResult(path, title, video_id)`
+    and exposes `get_video_info()` for the title-fetch pass
+  - `cli.py` uses title for the dir name; prompts in TTY mode,
+    auto-renames otherwise
+  - Transcript file inside is still named `<video_id>.<format>`
+
+Conflict resolution: 'Sample Video' -> 'Sample Video (1)' -> 'Sample
+Video (2)' etc. Default to rename, 'o'/'overwrite' in interactive
+mode to overwrite.
 
 Next: phase 2 (multiple output formats + caption fallback).
 

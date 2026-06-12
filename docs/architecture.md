@@ -17,7 +17,8 @@ URL
 | Module | Responsibility | Pure functions |
 |---|---|---|
 | `cli.py` | Typer entry point, orchestrator only | — |
-| `audio.py` | Download audio with yt-dlp, parse URLs | `extract_video_id()` |
+| `audio.py` | Download audio with yt-dlp, parse URLs, get video info | `extract_video_id()` |
+| `paths.py` | Sanitize titles, resolve unique output dirs | `sanitize_title()`, `resolve_unique_dir()` |
 | `captions.py` | Pull YouTube auto/manual captions | `fetch_captions()` |
 | `transcribe.py` | Run faster-whisper, return segments | `transcribe()` |
 | `diarize.py` | Speaker diarization + assignment | `assign_speakers()` |
@@ -43,3 +44,10 @@ URL
 The canonical internal representation is `list[TranscriptSegment]`
 where each segment has `text`, `start`, `end`, and optional `speaker`.
 JSON output is a direct serialization. TXT and SRT are projections.
+
+The output directory is named after the sanitized video title (e.g.
+`~/ytx-output/Me at the zoo/`). On conflict, the path is incremented
+(`Me at the zoo (1)`, `Me at the zoo (2)`, ...). In interactive mode
+with a TTY, the user is prompted to overwrite or rename; otherwise
+the tool always renames. The transcript file inside is named
+`<video_id>.<format>`.

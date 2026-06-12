@@ -18,7 +18,7 @@ from pathlib import Path
 
 import typer
 
-from youtubetranscriber import audio, output
+from youtubetranscriber import audio, output, paths
 from youtubetranscriber.transcribe import VALID_MODELS, TranscriptSegment
 from youtubetranscriber.transcribe import transcribe as do_transcribe
 
@@ -92,6 +92,12 @@ def transcribe(
         "--keep-audio/--no-keep-audio",
         help="Keep downloaded audio file after transcription. [phase 5]",
     ),
+    interactive: bool = typer.Option(
+        False,
+        "--interactive",
+        "-i",
+        help="Prompt before overwriting an existing output directory.",
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose",
@@ -105,6 +111,7 @@ def transcribe(
         model=model,
         format=format,
         output_dir=output_dir,
+        interactive=interactive,
         verbose=verbose,
     )
 
@@ -115,29 +122,42 @@ def _run_pipeline(
     model: str,
     format: str,
     output_dir: Path,
+    interactive: bool,
     verbose: bool,
 ) -> Path:
     """The actual work: download → transcribe → write. Returns output path."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Per-video subdirectory so audio and transcript live together.
-    video_id = audio.extract_video_id(url)
-    work_dir = output_dir / video_id
+    # We need the title to name the output dir, but we don't want to
+    # download twice. The first call to yt-dlp inside download_audio
+    # does both. We do a single round-trip.
+    #
+    # However, the dir name depends on the title, which we don't know
+    # until after the download. Solution: do a quick extract_info pass
+    # first (no download), then download into the resolved dir.
+    # The downside is two network calls. For a personal tool this is fine.
+    if verbose:
+        typer.echo(f"[ytx] Output root: {output_dir}")
+
+    typer.echo(f"[ytx] Fetching video info from {url} ...")
+    info = audio.get_video_info(url)
+    typer.echo(f"[ytx] Title: {info.title}")
+
+    work_dir = paths.resolve_unique_dir(output_dir, info.title, interactive=interactive)
     work_dir.mkdir(parents=True, exist_ok=True)
 
     if verbose:
-        typer.echo(f"[ytx] Video ID: {video_id}")
-        typer.echo(f"[ytx] Output dir: {work_dir}")
+        typer.echo(f"[ytx] Work dir: {work_dir}")
 
-    typer.echo(f"[ytx] Downloading audio from {url} ...")
-    audio_path = audio.download_audio(url, work_dir)
-    typer.echo(f"[ytx] Audio saved to: {audio_path}")
+    typer.echo("[ytx] Downloading audio ...")
+    result = audio.download_audio(url, work_dir)
+    typer.echo(f"[ytx] Audio saved to: {result.path}")
 
     typer.echo(f"[ytx] Transcribing with model={model!r} ...")
-    segments: list[TranscriptSegment] = do_transcribe(audio_path, model_name=model)
+    segments: list[TranscriptSegment] = do_transcribe(result.path, model_name=model)
     typer.echo(f"[ytx] Got {len(segments)} segments")
 
-    output_path = work_dir / f"{video_id}.{format}"
+    output_path = work_dir / f"{info.video_id}.{format}"
     output.write_transcript(segments, output_path, format=format)
     typer.echo(f"[ytx] Transcript written to: {output_path}")
 
