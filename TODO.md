@@ -3,21 +3,17 @@
 Living document of known issues, deferred decisions, and "this works but
 isn't great yet." Read this first when resuming work.
 
-## Current phase: 2 (formats + caption fallback)
+## Current phase: 2 (formats + caption fallback) - DONE
 
-Two features:
-  A. SRT and JSON output formats (txt is done)
-  B. `--prefer-captions` flag: try YouTube auto-captions first,
-     fall back to Whisper if unavailable
+Phase 2 complete:
+  - SRT writer (HH:MM:SS,mmm timestamps, sequential indices)
+  - JSON writer (canonical structured form with video_id, title, segments)
+  - Captions module wrapping youtube-transcript-api 1.2.4
+  - --prefer-captions flag with auto-fallback to Whisper on
+    CaptionsUnavailableError or empty caption list
+  - 99 tests passing (was 65 before phase 2)
 
-Order of work:
-  1. Add dep: youtube-transcript-api
-  2. output.py: SRT writer with TDD
-  3. output.py: JSON writer with TDD
-  4. captions.py: caption fetcher with TDD
-  5. cli.py: --prefer-captions flag and the captions-first code path
-  6. End-to-end smoke test on a real video
-  7. Commit and push branch
+Next: phase 3 (speaker diarization, opt-in).
 
 ## Phase 1 status
 
