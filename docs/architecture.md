@@ -4,12 +4,17 @@
 
 ```
 URL
-  → fetch audio (yt-dlp)
-  → captions? (YouTubeTranscriptApi)
-  → whisper (faster-whisper)
-  → diarize? (pyannote, opt-in)
+  → fetch info (yt-dlp, no download)
+  → resolve output dir (title + conflict-aware rename)
+  → --prefer-captions?
+     yes → try YouTube captions
+       ok    → use captions
+       fail  → fall through to Whisper
+  → download audio (yt-dlp)
+  → transcribe (faster-whisper)
+  → --diarize? (pyannote, opt-in) [phase 3]
   → output (txt / srt / json)
-  → summarize? (Ollama cloud, opt-in)
+  → --summarize? (Ollama cloud, opt-in) [phase 4]
 ```
 
 ## Modules
