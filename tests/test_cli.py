@@ -208,3 +208,212 @@ def test_unsafe_title_gets_sanitized(tmp_path: Path) -> None:
     title_dirs = [p for p in tmp_path.iterdir() if p.is_dir()]
     assert len(title_dirs) == 1
     assert "Cool_Video" in title_dirs[0].name
+
+
+# --- --prefer-captions path ------------------------------------------------
+
+
+def test_prefer_captions_uses_captions_when_available(tmp_path: Path) -> None:
+    """With --prefer-captions, captions are used and Whisper is NOT called."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    caption_segments = [
+        TranscriptSegment(text="From captions.", start=0.0, end=1.0),
+    ]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch(
+            "youtubetranscriber.cli.captions.fetch_captions",
+            return_value=caption_segments,
+        ) as fetch_mock,
+        patch("youtubetranscriber.cli.audio.download_audio") as dl_mock,
+        patch("youtubetranscriber.cli.do_transcribe") as whisper_mock,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--prefer-captions",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    assert fetch_mock.called
+    # Crucial: download_audio and do_transcribe should NOT have been called
+    assert not dl_mock.called, "download_audio should be skipped with --prefer-captions"
+    assert not whisper_mock.called, "Whisper should be skipped with --prefer-captions"
+
+    out_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt"
+    content = out_file.read_text()
+    assert "From captions." in content
+
+
+def test_prefer_captions_falls_back_to_whisper(tmp_path: Path) -> None:
+    """If captions fail, fall through to audio download + Whisper."""
+    from youtubetranscriber.captions import CaptionsUnavailableError
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    whisper_segments = [TranscriptSegment(text="From Whisper.", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch(
+            "youtubetranscriber.cli.captions.fetch_captions",
+            side_effect=CaptionsUnavailableError("no captions"),
+        ) as fetch_mock,
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio) as dl_mock,
+        patch("youtubetranscriber.cli.do_transcribe", return_value=whisper_segments),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--prefer-captions",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    assert fetch_mock.called
+    # Fall through happened
+    assert dl_mock.called
+    assert "Falling back to Whisper" in result.stdout
+
+    out_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt"
+    content = out_file.read_text()
+    assert "From Whisper." in content
+
+
+def test_prefer_captions_falls_back_on_empty_captions(tmp_path: Path) -> None:
+    """An empty caption list is treated as 'not available' and falls through."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    whisper_segments = [TranscriptSegment(text="From Whisper.", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.captions.fetch_captions", return_value=[]),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=whisper_segments),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--prefer-captions",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    # Both messages (CaptionsUnavailable and empty captions) emit
+    # "falling back to Whisper" (capitalization varies at the start
+    # of the sentence, so we case-fold the whole comparison).
+    assert "falling back to whisper" in result.stdout.lower()
+
+
+def test_without_prefer_captions_skips_captions(tmp_path: Path) -> None:
+    """Default behavior: don't even try captions, go straight to Whisper."""
+    fake_audio = _fake_audio_result(tmp_path)
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.captions.fetch_captions") as fetch_mock,
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=[]),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    # captions.fetch_captions should NOT have been called
+    assert not fetch_mock.called
+
+
+def test_help_includes_prefer_captions() -> None:
+    result = runner.invoke(app, ["--help"])
+    assert "--prefer-captions" in result.stdout
+    assert "--format" in result.stdout
+
+
+# --- SRT and JSON end-to-end ----------------------------------------------
+
+
+def test_end_to_end_writes_srt(tmp_path: Path) -> None:
+    """--format srt should produce a valid SRT file."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [
+        TranscriptSegment(text="Hello.", start=0.0, end=1.5),
+        TranscriptSegment(text="World.", start=1.5, end=3.0),
+    ]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--format",
+                "srt",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    out_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.srt"
+    assert out_file.exists()
+    content = out_file.read_text()
+    assert "00:00:00,000 --> 00:00:01,500" in content
+    assert "Hello." in content
+
+
+def test_end_to_end_writes_json_with_metadata(tmp_path: Path) -> None:
+    """--format json should include video_id and title in the output."""
+    import json
+
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [TranscriptSegment(text="Hello.", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    out_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.json"
+    data = json.loads(out_file.read_text())
+    assert data["video_id"] == "dQw4w9WgXcQ"
+    assert data["title"] == "Sample Video"
+    assert data["segments"][0]["text"] == "Hello."

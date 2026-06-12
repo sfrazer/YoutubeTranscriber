@@ -18,7 +18,7 @@ from pathlib import Path
 
 import typer
 
-from youtubetranscriber import audio, output, paths
+from youtubetranscriber import audio, captions, output, paths
 from youtubetranscriber.transcribe import VALID_MODELS, TranscriptSegment
 from youtubetranscriber.transcribe import transcribe as do_transcribe
 
@@ -79,7 +79,7 @@ def transcribe(
     prefer_captions: bool = typer.Option(
         False,
         "--prefer-captions/--no-prefer-captions",
-        help="Try YouTube auto-captions first. [phase 2]",
+        help=("Try YouTube auto-captions first; fall back to Whisper if unavailable."),
     ),
     output_dir: Path = typer.Option(  # noqa: B008  (Typer idiom: option must be a default-arg call)
         DEFAULT_OUTPUT_DIR,
@@ -111,6 +111,7 @@ def transcribe(
         model=model,
         format=format,
         output_dir=output_dir,
+        prefer_captions=prefer_captions,
         interactive=interactive,
         verbose=verbose,
     )
@@ -122,20 +123,17 @@ def _run_pipeline(
     model: str,
     format: str,
     output_dir: Path,
+    prefer_captions: bool,
     interactive: bool,
     verbose: bool,
 ) -> Path:
-    """The actual work: download → transcribe → write. Returns output path."""
+    """The actual work: download → transcribe → write. Returns output path.
+
+    When `prefer_captions` is True, tries YouTube's auto/manual captions
+    first; on CaptionsUnavailableError, falls through to Whisper.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # We need the title to name the output dir, but we don't want to
-    # download twice. The first call to yt-dlp inside download_audio
-    # does both. We do a single round-trip.
-    #
-    # However, the dir name depends on the title, which we don't know
-    # until after the download. Solution: do a quick extract_info pass
-    # first (no download), then download into the resolved dir.
-    # The downside is two network calls. For a personal tool this is fine.
     if verbose:
         typer.echo(f"[ytx] Output root: {output_dir}")
 
@@ -149,19 +147,58 @@ def _run_pipeline(
     if verbose:
         typer.echo(f"[ytx] Work dir: {work_dir}")
 
-    typer.echo("[ytx] Downloading audio ...")
+    segments = _obtain_segments(
+        url=url,
+        info=info,
+        work_dir=work_dir,
+        model=model,
+        prefer_captions=prefer_captions,
+        verbose=verbose,
+    )
+    typer.echo(f"[ytx] Got {len(segments)} segments")
+
+    output_path = work_dir / f"{info.video_id}.{format}"
+    output.write_transcript(
+        segments, output_path, format=format, video_id=info.video_id, title=info.title
+    )
+    typer.echo(f"[ytx] Transcript written to: {output_path}")
+
+    return output_path
+
+
+def _obtain_segments(
+    *,
+    url: str,
+    info: audio.DownloadResult,
+    work_dir: Path,
+    model: str,
+    prefer_captions: bool,
+    verbose: bool,
+) -> list[TranscriptSegment]:
+    """Get transcript segments from captions or Whisper.
+
+    If `prefer_captions` is True, try captions first and fall back to
+    Whisper on CaptionsUnavailableError. Otherwise go straight to
+    Whisper.
+    """
+    if prefer_captions:
+        try:
+            typer.echo("[ytx] Trying YouTube captions ...")
+            segments = captions.fetch_captions(info.video_id)
+            if segments:
+                typer.echo(f"[ytx] Got {len(segments)} caption segments")
+                return segments
+            # Empty list is technically not an error, but a video with
+            # no caption segments is useless. Fall through to Whisper.
+            typer.echo("[ytx] No caption segments found; falling back to Whisper")
+        except captions.CaptionsUnavailableError as e:
+            typer.echo(f"[ytx] Captions unavailable: {e}")
+            typer.echo("[ytx] Falling back to Whisper")
     result = audio.download_audio(url, work_dir)
     typer.echo(f"[ytx] Audio saved to: {result.path}")
 
     typer.echo(f"[ytx] Transcribing with model={model!r} ...")
-    segments: list[TranscriptSegment] = do_transcribe(result.path, model_name=model)
-    typer.echo(f"[ytx] Got {len(segments)} segments")
-
-    output_path = work_dir / f"{info.video_id}.{format}"
-    output.write_transcript(segments, output_path, format=format)
-    typer.echo(f"[ytx] Transcript written to: {output_path}")
-
-    return output_path
+    return do_transcribe(result.path, model_name=model)
 
 
 if __name__ == "__main__":
