@@ -153,9 +153,7 @@ def test_transcribe_falls_back_to_cpu_on_unsupported_device(tmp_path: Path) -> N
         return fake_cpu_model
 
     with (
-        patch(
-            "youtubetranscriber.transcribe.WhisperModel", side_effect=fake_constructor
-        ),
+        patch("youtubetranscriber.transcribe.WhisperModel", side_effect=fake_constructor),
         pytest.warns(UserWarning, match="falling back to 'cpu'"),
     ):
         result = transcribe(audio, model_name="tiny", device="mps")

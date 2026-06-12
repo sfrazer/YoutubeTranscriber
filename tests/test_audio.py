@@ -10,9 +10,11 @@ import pytest
 
 from youtubetranscriber.audio import (
     AudioDownloadError,
+    DownloadResult,
     InvalidURLError,
     download_audio,
     extract_video_id,
+    get_video_info,
 )
 
 # --- extract_video_id -------------------------------------------------------
@@ -65,24 +67,32 @@ def test_extract_video_id_invalid(url: str) -> None:
 
 
 def test_download_audio_returns_path_to_downloaded_file(tmp_path: Path) -> None:
-    """download_audio should return the path to the .m4a file yt-dlp produced."""
+    """download_audio should return a DownloadResult with path and title."""
 
     expected_path = tmp_path / "Some Video [dQw4w9WgXcQ].m4a"
+    expected_title = "Some Video"
 
     fake_ydl = MagicMock()
     fake_ydl_class = MagicMock(return_value=fake_ydl)
-    # Simulate yt-dlp writing the file
+    # Simulate yt-dlp writing the file and providing metadata
     fake_ydl_class.return_value.__enter__.return_value.prepare_filename.return_value = str(
         expected_path.with_suffix("")
     )
+    fake_ydl_class.return_value.__enter__.return_value.extract_info.return_value = {
+        "id": "dQw4w9WgXcQ",
+        "title": expected_title,
+    }
 
     with patch("youtubetranscriber.audio.yt_dlp.YoutubeDL", fake_ydl_class):
         # Create the file so existence check passes
         expected_path.write_bytes(b"fake audio")
         result = download_audio("https://youtu.be/dQw4w9WgXcQ", tmp_path)
 
-    assert result == expected_path
-    assert result.exists()
+    assert isinstance(result, DownloadResult)
+    assert result.path == expected_path
+    assert result.path.exists()
+    assert result.title == expected_title
+    assert result.video_id == "dQw4w9WgXcQ"
 
 
 def test_download_audio_wraps_yt_dlp_errors(tmp_path: Path) -> None:
@@ -105,6 +115,40 @@ def test_download_audio_wraps_yt_dlp_errors(tmp_path: Path) -> None:
         download_audio("https://youtu.be/dQw4w9WgXcQ", tmp_path)
 
 
+def test_get_video_info_returns_metadata(tmp_path: Path) -> None:
+    """get_video_info should fetch title/id without downloading."""
+    fake_ydl = MagicMock()
+    fake_ydl_class = MagicMock(return_value=fake_ydl)
+    fake_ydl_class.return_value.__enter__.return_value.extract_info.return_value = {
+        "id": "dQw4w9WgXcQ",
+        "title": "Never Gonna Give You Up",
+    }
+
+    with patch("youtubetranscriber.audio.yt_dlp.YoutubeDL", fake_ydl_class) as ydl_cls:
+        result = get_video_info("https://youtu.be/dQw4w9WgXcQ")
+
+    assert result.title == "Never Gonna Give You Up"
+    assert result.video_id == "dQw4w9WgXcQ"
+    # Verify we asked yt-dlp NOT to download
+    params = ydl_cls.call_args.args[0]
+    assert params.get("skip_download") is True
+
+
+def test_get_video_info_falls_back_to_id_for_missing_title(tmp_path: Path) -> None:
+    """If yt-dlp returns no title, fall back to the video ID."""
+    fake_ydl = MagicMock()
+    fake_ydl_class = MagicMock(return_value=fake_ydl)
+    fake_ydl_class.return_value.__enter__.return_value.extract_info.return_value = {
+        "id": "dQw4w9WgXcQ",
+        # no 'title' key
+    }
+
+    with patch("youtubetranscriber.audio.yt_dlp.YoutubeDL", fake_ydl_class):
+        result = get_video_info("https://youtu.be/dQw4w9WgXcQ")
+
+    assert result.title == "dQw4w9WgXcQ"
+
+
 def test_download_audio_uses_m4a_format(tmp_path: Path) -> None:
     """We should request m4a audio specifically for quality + size balance."""
 
@@ -114,6 +158,10 @@ def test_download_audio_uses_m4a_format(tmp_path: Path) -> None:
     fake_ydl_class.return_value.__enter__.return_value.prepare_filename.return_value = str(
         expected_path.with_suffix("")
     )
+    fake_ydl_class.return_value.__enter__.return_value.extract_info.return_value = {
+        "id": "dQw4w9WgXcQ",
+        "title": "video",
+    }
 
     with patch("youtubetranscriber.audio.yt_dlp.YoutubeDL", fake_ydl_class) as ydl_cls:
         expected_path.write_bytes(b"fake")
