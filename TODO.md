@@ -3,7 +3,32 @@
 Living document of known issues, deferred decisions, and "this works but
 isn't great yet." Read this first when resuming work.
 
-## Current phase: 2 (formats + caption fallback) - DONE
+## Current phase: 3 (speaker diarization, opt-in)
+
+The hardest phase. Add `--diarize` flag that runs pyannote.audio
+in parallel with Whisper and assigns speaker labels to each
+transcript segment. Captions are NOT diarized (no audio-derived
+segments to work with).
+
+Order of work:
+  1. merge.py: pure function `assign_speakers()` with full TDD
+     (handles overlap, multi-speaker, no-overlap edge cases)
+  2. diarize.py: pyannote.audio wrapper
+     - lazy model load (don't download on first import)
+     - clear errors for missing/invalid HF_TOKEN
+     - returns SpeakerSpan list
+  3. cli.py: --diarize flag, --num-speakers flag (default auto)
+     - friendly errors when HF_TOKEN missing
+     - integration with existing pipeline
+  4. Real-video smoke test on a multi-speaker video
+  5. Commit and push branch
+
+Key dependencies to add:
+  - pyannote.audio (heavy: ~500MB with torch/torchaudio)
+  - Note: requires user to have HF_TOKEN set and to have accepted
+    the model EULA at huggingface.co/pyannote/speaker-diarization-3.1
+
+## Phase 2 status (DONE, merged as PR #4)
 
 Phase 2 complete:
   - SRT writer (HH:MM:SS,mmm timestamps, sequential indices)
@@ -12,8 +37,6 @@ Phase 2 complete:
   - --prefer-captions flag with auto-fallback to Whisper on
     CaptionsUnavailableError or empty caption list
   - 99 tests passing (was 65 before phase 2)
-
-Next: phase 3 (speaker diarization, opt-in).
 
 ## Phase 1 status
 
