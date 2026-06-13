@@ -18,7 +18,8 @@ from pathlib import Path
 
 import typer
 
-from youtubetranscriber import audio, captions, output, paths
+from youtubetranscriber import audio, captions, diarize, merge, output, paths
+from youtubetranscriber.diarize import HfTokenMissingError
 from youtubetranscriber.transcribe import VALID_MODELS, TranscriptSegment
 from youtubetranscriber.transcribe import transcribe as do_transcribe
 
@@ -66,10 +67,28 @@ def transcribe(
         help="Output format.",
         callback=_validate_format,
     ),
-    diarize: bool = typer.Option(
+    diarize_flag: bool = typer.Option(
         False,
         "--diarize/--no-diarize",
-        help="Identify speakers (opt-in, requires HF_TOKEN). [phase 3]",
+        help=(
+            "Identify speakers (requires HF_TOKEN; only works with "
+            "Whisper-sourced transcripts, not captions)."
+        ),
+    ),
+    num_speakers: int | None = typer.Option(
+        None,
+        "--num-speakers",
+        help="Exact number of speakers (passed to pyannote). Default: auto-detect.",
+    ),
+    min_speakers: int | None = typer.Option(
+        None,
+        "--min-speakers",
+        help="Minimum number of speakers for pyannote to consider.",
+    ),
+    max_speakers: int | None = typer.Option(
+        None,
+        "--max-speakers",
+        help="Maximum number of speakers for pyannote to consider.",
     ),
     summarize: bool = typer.Option(
         False,
@@ -112,6 +131,10 @@ def transcribe(
         format=format,
         output_dir=output_dir,
         prefer_captions=prefer_captions,
+        diarize_flag=diarize_flag,
+        num_speakers=num_speakers,
+        min_speakers=min_speakers,
+        max_speakers=max_speakers,
         interactive=interactive,
         verbose=verbose,
     )
@@ -124,14 +147,14 @@ def _run_pipeline(
     format: str,
     output_dir: Path,
     prefer_captions: bool,
+    diarize_flag: bool,
+    num_speakers: int | None,
+    min_speakers: int | None,
+    max_speakers: int | None,
     interactive: bool,
     verbose: bool,
 ) -> Path:
-    """The actual work: download → transcribe → write. Returns output path.
-
-    When `prefer_captions` is True, tries YouTube's auto/manual captions
-    first; on CaptionsUnavailableError, falls through to Whisper.
-    """
+    """The actual work: fetch → (captions | transcribe | diarize) → write."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if verbose:
@@ -147,7 +170,7 @@ def _run_pipeline(
     if verbose:
         typer.echo(f"[ytx] Work dir: {work_dir}")
 
-    segments = _obtain_segments(
+    segments, audio_path = _obtain_segments(
         url=url,
         info=info,
         work_dir=work_dir,
@@ -156,6 +179,15 @@ def _run_pipeline(
         verbose=verbose,
     )
     typer.echo(f"[ytx] Got {len(segments)} segments")
+
+    if diarize_flag:
+        segments = _maybe_diarize(
+            segments=segments,
+            audio_path=audio_path,
+            num_speakers=num_speakers,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
 
     output_path = work_dir / f"{info.video_id}.{format}"
     output.write_transcript(
@@ -174,12 +206,12 @@ def _obtain_segments(
     model: str,
     prefer_captions: bool,
     verbose: bool,
-) -> list[TranscriptSegment]:
-    """Get transcript segments from captions or Whisper.
+) -> tuple[list[TranscriptSegment], Path | None]:
+    """Get transcript segments and the audio path that produced them.
 
-    If `prefer_captions` is True, try captions first and fall back to
-    Whisper on CaptionsUnavailableError. Otherwise go straight to
-    Whisper.
+    Returns (segments, audio_path). The audio_path is None when segments
+    came from YouTube captions (no local audio file). This matters for
+    diarization, which requires a local audio file.
     """
     if prefer_captions:
         try:
@@ -187,18 +219,61 @@ def _obtain_segments(
             segments = captions.fetch_captions(info.video_id)
             if segments:
                 typer.echo(f"[ytx] Got {len(segments)} caption segments")
-                return segments
+                return segments, None
             # Empty list is technically not an error, but a video with
             # no caption segments is useless. Fall through to Whisper.
             typer.echo("[ytx] No caption segments found; falling back to Whisper")
         except captions.CaptionsUnavailableError as e:
             typer.echo(f"[ytx] Captions unavailable: {e}")
             typer.echo("[ytx] Falling back to Whisper")
+    typer.echo("[ytx] Downloading audio ...")
     result = audio.download_audio(url, work_dir)
     typer.echo(f"[ytx] Audio saved to: {result.path}")
 
     typer.echo(f"[ytx] Transcribing with model={model!r} ...")
-    return do_transcribe(result.path, model_name=model)
+    return do_transcribe(result.path, model_name=model), result.path
+
+
+def _maybe_diarize(
+    *,
+    segments: list[TranscriptSegment],
+    audio_path: Path | None,
+    num_speakers: int | None,
+    min_speakers: int | None,
+    max_speakers: int | None,
+) -> list[TranscriptSegment]:
+    """Run diarization and assign speakers to segments.
+
+    If audio_path is None (segments came from captions), skip with a
+    notice. If HF_TOKEN is missing, surface a clear, user-actionable
+    error.
+    """
+    if audio_path is None:
+        typer.echo(
+            "[ytx] Note: --diarize requires audio; caption-sourced "
+            "transcripts can't be diarized. Skipping."
+        )
+        return segments
+
+    try:
+        typer.echo("[ytx] Running speaker diarization ...")
+        spans = diarize.diarize(
+            audio_path,
+            num_speakers=num_speakers,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
+    except HfTokenMissingError as e:
+        # Print the user-actionable error message and exit non-zero.
+        # The HfTokenMissingError message itself explains how to fix it.
+        typer.echo(f"[ytx] Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    if not spans:
+        typer.echo("[ytx] Diarization found no speakers")
+        return segments
+
+    return merge.assign_speakers(segments, spans)
 
 
 if __name__ == "__main__":

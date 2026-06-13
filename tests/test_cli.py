@@ -417,3 +417,154 @@ def test_end_to_end_writes_json_with_metadata(tmp_path: Path) -> None:
     assert data["video_id"] == "dQw4w9WgXcQ"
     assert data["title"] == "Sample Video"
     assert data["segments"][0]["text"] == "Hello."
+
+
+# --- --diarize path -------------------------------------------------------
+
+
+def test_diarize_assigns_speakers_to_whisper_segments(tmp_path: Path) -> None:
+    """With --diarize, Whisper segments get speaker labels from pyannote."""
+    from youtubetranscriber.merge import SpeakerSpan
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [
+        TranscriptSegment(text="hi", start=0.0, end=1.0),
+        TranscriptSegment(text="there", start=2.0, end=3.0),
+    ]
+    fake_spans = [
+        SpeakerSpan(speaker="SPEAKER_00", start=0.0, end=1.0),
+        SpeakerSpan(speaker="SPEAKER_01", start=2.0, end=3.0),
+    ]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+        patch("youtubetranscriber.cli.diarize.diarize", return_value=fake_spans),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--diarize",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    out_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt"
+    content = out_file.read_text()
+    # txt writer prefixes speakers in brackets
+    assert "[SPEAKER_00] hi" in content
+    assert "[SPEAKER_01] there" in content
+
+
+def test_diarize_skips_when_segments_came_from_captions(tmp_path: Path) -> None:
+    """If captions were used, --diarize is a no-op (with a notice)."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    caption_segments = [TranscriptSegment(text="caption text", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch(
+            "youtubetranscriber.cli.captions.fetch_captions",
+            return_value=caption_segments,
+        ),
+        patch("youtubetranscriber.cli.audio.download_audio") as dl_mock,
+        patch("youtubetranscriber.cli.do_transcribe") as whisper_mock,
+        patch("youtubetranscriber.cli.diarize.diarize") as diarize_mock,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--prefer-captions",
+                "--diarize",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    # Diarization should NOT have been called
+    assert not diarize_mock.called
+    # Whisper and download also not called
+    assert not whisper_mock.called
+    assert not dl_mock.called
+    # The notice should appear
+    assert "can't be diarized" in result.stdout
+
+
+def test_diarize_fails_clearly_when_hf_token_missing(tmp_path: Path) -> None:
+    """Missing HF_TOKEN should fail with the user-actionable error."""
+    from youtubetranscriber.diarize import HfTokenMissingError
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [TranscriptSegment(text="hi", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+        patch(
+            "youtubetranscriber.cli.diarize.diarize",
+            side_effect=HfTokenMissingError("HF_TOKEN is not set"),
+        ),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--diarize",
+            ],
+        )
+
+    # The exception should propagate to the user (non-zero exit)
+    assert result.exit_code != 0
+    # The user-actionable error should be printed to stderr
+    assert "HF_TOKEN" in (result.output or "") or "HF_TOKEN" in (result.stderr or "")
+
+
+def test_diarize_passes_num_speakers(tmp_path: Path) -> None:
+    """The --num-speakers flag should reach the diarize function."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [TranscriptSegment(text="hi", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+        patch("youtubetranscriber.cli.diarize.diarize", return_value=[]) as diarize_mock,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--diarize",
+                "--num-speakers",
+                "3",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    diarize_mock.assert_called_once()
+    call_kwargs = diarize_mock.call_args.kwargs
+    assert call_kwargs.get("num_speakers") == 3
+
+
+def test_help_includes_diarize_options() -> None:
+    result = runner.invoke(app, ["--help"])
+    assert "--diarize" in result.stdout
+    assert "--num-speakers" in result.stdout
+    assert "--min-speakers" in result.stdout
+    assert "--max-speakers" in result.stdout
