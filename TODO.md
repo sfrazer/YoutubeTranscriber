@@ -3,11 +3,17 @@
 Living document of known issues, deferred decisions, and "this works but
 isn't great yet." Read this first when resuming work.
 
-## Current phase: 1 (MVP) - title-based output dirs follow-up
+## Current phase: 2 (formats + caption fallback) - DONE
 
-The MVP works. The follow-up fix changes the output directory
-naming from `<video_id>` to `<video_title>` with conflict-aware
-auto-rename.
+Phase 2 complete:
+  - SRT writer (HH:MM:SS,mmm timestamps, sequential indices)
+  - JSON writer (canonical structured form with video_id, title, segments)
+  - Captions module wrapping youtube-transcript-api 1.2.4
+  - --prefer-captions flag with auto-fallback to Whisper on
+    CaptionsUnavailableError or empty caption list
+  - 99 tests passing (was 65 before phase 2)
+
+Next: phase 3 (speaker diarization, opt-in).
 
 ## Phase 1 status
 
@@ -18,9 +24,11 @@ Phase 1 MVP is complete and verified. The tool can:
     with CPU fallback for unsupported devices like MPS in CTranslate2 4+)
   - Write a clean .txt file with one segment per line
   - Run end-to-end via 'uv run ytx URL'
+  - Output dir is named after the sanitized video title
+  - Conflict-aware auto-rename on duplicate runs
+  - --interactive flag for TTY prompt
 
-Verified: transcribed 'Me at the zoo' (jNQXAC9IVRw) with tiny model,
-got the famous first words on YouTube correctly.
+Merged: PR #1 (phase-1-mvp), PR #2 (title-based dirs), PR #3 (uv doc cleanup).
 
 ## Title-based output dirs (this fix branch)
 
