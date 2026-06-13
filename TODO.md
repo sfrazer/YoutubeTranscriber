@@ -3,30 +3,30 @@
 Living document of known issues, deferred decisions, and "this works but
 isn't great yet." Read this first when resuming work.
 
-## Current phase: 3 (speaker diarization, opt-in)
+## Current phase: 3 (speaker diarization, opt-in) - DONE
 
-The hardest phase. Add `--diarize` flag that runs pyannote.audio
-in parallel with Whisper and assigns speaker labels to each
-transcript segment. Captions are NOT diarized (no audio-derived
-segments to work with).
+Phase 3 complete:
+  - merge.py: pure function for assigning speakers to segments
+    (max temporal overlap algorithm, 13 tests)
+  - diarize.py: pyannote.audio wrapper with HF_TOKEN handling
+    and lazy model load
+  - --diarize / --num-speakers / --min-speakers / --max-speakers
+    flags on the CLI
+  - Captions are NOT diarized (no audio segments); clear notice
+    when this happens
+  - HF_TOKEN missing/invalid: user-actionable error with fix
+    steps, exit code 1
+  - 126 tests passing (was 99 before phase 3)
 
-Order of work:
-  1. merge.py: pure function `assign_speakers()` with full TDD
-     (handles overlap, multi-speaker, no-overlap edge cases)
-  2. diarize.py: pyannote.audio wrapper
-     - lazy model load (don't download on first import)
-     - clear errors for missing/invalid HF_TOKEN
-     - returns SpeakerSpan list
-  3. cli.py: --diarize flag, --num-speakers flag (default auto)
-     - friendly errors when HF_TOKEN missing
-     - integration with existing pipeline
-  4. Real-video smoke test on a multi-speaker video
-  5. Commit and push branch
+Smoke tested:
+  - Captions + --diarize: emits "can't be diarized" notice, exits 0
+  - Whisper + --diarize + no HF_TOKEN: full pipeline runs
+    (download, transcribe), then fails cleanly with the
+    user-actionable error message
+  - End-to-end with real pyannote model: requires user to have
+    HF_TOKEN and accepted the EULA (documented in PR #5)
 
-Key dependencies to add:
-  - pyannote.audio (heavy: ~500MB with torch/torchaudio)
-  - Note: requires user to have HF_TOKEN set and to have accepted
-    the model EULA at huggingface.co/pyannote/speaker-diarization-3.1
+Next: phase 4 (summarization via Ollama cloud).
 
 ## Phase 2 status (DONE, merged as PR #4)
 

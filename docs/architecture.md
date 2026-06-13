@@ -12,7 +12,9 @@ URL
        fail  → fall through to Whisper
   → download audio (yt-dlp)
   → transcribe (faster-whisper)
-  → --diarize? (pyannote, opt-in) [phase 3]
+  → --diarize? (pyannote, opt-in)
+     yes → assign speaker labels (merge.py) to Whisper segments
+     no  → skip
   → output (txt / srt / json)
   → --summarize? (Ollama cloud, opt-in) [phase 4]
 ```
