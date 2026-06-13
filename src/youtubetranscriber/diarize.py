@@ -50,9 +50,10 @@ def _load_pipeline() -> Pipeline:
             "\n"
             "To fix this:\n"
             "  1. Create a free account at https://huggingface.co/join\n"
-            "  2. Accept the EULA at https://huggingface.co/pyannote/speaker-diarization-3.1\n"
-            "     (and the dependent model at "
-            "https://huggingface.co/pyannote/segmentation-3.0)\n"
+            "  2. Accept the EULAs at ALL three gated pyannote repos:\n"
+            "     - https://huggingface.co/pyannote/speaker-diarization-3.1\n"
+            "     - https://huggingface.co/pyannote/segmentation-3.0\n"
+            "     - https://huggingface.co/pyannote/speaker-diarization-community-1\n"
             "  3. Create an access token at https://huggingface.co/settings/tokens\n"
             "  4. Set HF_TOKEN in your environment, e.g.:\n"
             "       export HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx\n"
@@ -61,19 +62,20 @@ def _load_pipeline() -> Pipeline:
     pipeline = Pipeline.from_pretrained(DEFAULT_PIPELINE, token=token)
     if pipeline is None:
         # from_pretrained returns None when the user hasn't accepted
-        # the EULA for the model OR when a gated dependency (like
-        # pyannote/segmentation-3.0) is inaccessible. Surface this as
-        # a token-missing error so the user gets the same actionable
-        # guidance.
+        # the EULA for the model OR when a gated dependency is
+        # inaccessible. Surface this as a token-missing error so
+        # the user gets the same actionable guidance.
         raise HfTokenMissingError(
             "Could not load the diarization pipeline. This usually means\n"
-            "your HF_TOKEN doesn't have access to the model or its\n"
-            "dependencies. Please:\n"
+            "your HF_TOKEN doesn't have access to the model or one of\n"
+            "its three gated dependencies. Please:\n"
             "  1. Visit https://huggingface.co/pyannote/speaker-diarization-3.1\n"
             "     and click 'Agree and access repository' to accept the EULA\n"
             "  2. Visit https://huggingface.co/pyannote/segmentation-3.0\n"
             "     and request access (it's a gated dependency)\n"
-            "  3. Make sure your HF_TOKEN is from the same Hugging Face account\n"
+            "  3. Visit https://huggingface.co/pyannote/speaker-diarization-community-1\n"
+            "     and request access (another gated dependency)\n"
+            "  4. Make sure your HF_TOKEN is from the same Hugging Face account\n"
         )
     return pipeline
 
