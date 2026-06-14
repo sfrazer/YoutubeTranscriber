@@ -3,7 +3,27 @@
 Living document of known issues, deferred decisions, and "this works but
 isn't great yet." Read this first when resuming work.
 
-## Current phase: 4 (summarization via Ollama cloud) - DONE
+## Current phase: 5 (polish)
+
+Three small improvements:
+  1. --keep-audio / --no-keep-audio: real working flag.
+     Default: delete audio after successful pipeline (it was
+     intermediate cruft). --keep-audio opts in to keeping the
+     .m4a for re-transcription.
+  2. Progress bars: wrap the long-running operations
+     (download, transcribe, diarize, summarize) in rich.progress
+     so the user has visibility during the 5-15 min pipelines.
+  3. README refresh: rewrite to reflect the actual tool
+     (captions, SRT/JSON, diarize, summarize, all flags).
+
+Order:
+  1. Implement --keep-audio with TDD
+  2. Add progress bars
+  3. Rewrite README
+  4. Smoke test
+  5. Commit and push branch
+
+## Phase 4 status (DONE, merged as PR #6)
 
 Phase 4 complete:
   - summarize.py wraps ollama.Client for cloud chat
@@ -25,8 +45,6 @@ Smoke tested:
   - Got an empty response from gpt-oss:20b (model config issue
     at Ollama's end, not our code) — default is now gpt-oss:120b
     which works; user can override
-
-Next: phase 5 (polish, --keep-audio flag, progress bars, etc.)
 
 ## Phase 3 status (DONE, merged as PR #5)
 

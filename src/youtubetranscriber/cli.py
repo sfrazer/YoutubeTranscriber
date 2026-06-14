@@ -123,7 +123,12 @@ def transcribe(
     keep_audio: bool = typer.Option(
         False,
         "--keep-audio/--no-keep-audio",
-        help="Keep downloaded audio file after transcription. [phase 5]",
+        help=(
+            "Keep the downloaded .m4a audio file alongside the "
+            "transcript. Default: delete it (the audio is intermediate; "
+            "use this flag if you plan to re-transcribe with a different "
+            "model)."
+        ),
     ),
     interactive: bool = typer.Option(
         False,
@@ -152,6 +157,7 @@ def transcribe(
         summarize=summarize,
         summary_model=summary_model,
         summary_prompt=summary_prompt,
+        keep_audio=keep_audio,
         interactive=interactive,
         verbose=verbose,
     )
@@ -171,6 +177,7 @@ def _run_pipeline(
     summarize: bool,
     summary_model: str,
     summary_prompt: Path | None,
+    keep_audio: bool,
     interactive: bool,
     verbose: bool,
 ) -> Path:
@@ -225,7 +232,20 @@ def _run_pipeline(
             prompt_path=summary_prompt,
         )
 
+    if not keep_audio and audio_path is not None:
+        _cleanup_audio(audio_path)
+
     return output_path
+
+
+def _cleanup_audio(audio_path: Path) -> None:
+    """Delete the intermediate audio file. Best-effort."""
+    try:
+        audio_path.unlink(missing_ok=True)
+        typer.echo(f"[ytx] Removed audio file: {audio_path}")
+    except OSError as e:
+        # Don't fail the whole run just because we couldn't clean up
+        typer.echo(f"[ytx] Warning: could not remove {audio_path}: {e}")
 
 
 def _obtain_segments(

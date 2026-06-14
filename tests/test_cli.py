@@ -732,3 +732,117 @@ def test_help_includes_summarize_options() -> None:
     assert "--summarize" in result.stdout
     assert "--summary-model" in result.stdout
     assert "--summary-prompt" in result.stdout
+
+
+# --- --keep-audio flag ---------------------------------------------------
+
+
+def test_default_deletes_audio_file(tmp_path: Path) -> None:
+    """By default, the audio file is removed after successful pipeline."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [TranscriptSegment(text="x", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    # Audio file should be gone
+    assert not fake_audio.path.exists()
+    # But the transcript should still be there
+    assert (tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt").exists()
+
+
+def test_keep_audio_preserves_audio_file(tmp_path: Path) -> None:
+    """--keep-audio preserves the downloaded .m4a."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [TranscriptSegment(text="x", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--keep-audio",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    # Audio file should still be there
+    assert fake_audio.path.exists()
+    # And the transcript too
+    assert (tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt").exists()
+
+
+def test_no_keep_audio_explicit_works(tmp_path: Path) -> None:
+    """--no-keep-audio explicitly deletes (same as default)."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [TranscriptSegment(text="x", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--no-keep-audio",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    assert not fake_audio.path.exists()
+
+
+def test_captions_path_does_not_error_on_audio_cleanup(tmp_path: Path) -> None:
+    """If captions were used (no audio file), cleanup should be a no-op."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    caption_segments = [TranscriptSegment(text="x", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch(
+            "youtubetranscriber.cli.captions.fetch_captions",
+            return_value=caption_segments,
+        ),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--prefer-captions",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    # The cleanup should not have failed; transcript exists
+    assert (tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt").exists()
