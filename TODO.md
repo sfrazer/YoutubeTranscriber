@@ -3,7 +3,32 @@
 Living document of known issues, deferred decisions, and "this works but
 isn't great yet." Read this first when resuming work.
 
-## Current phase: 2 (formats + caption fallback) - DONE
+## Current phase: 3 (speaker diarization, opt-in) - DONE
+
+Phase 3 complete:
+  - merge.py: pure function for assigning speakers to segments
+    (max temporal overlap algorithm, 13 tests)
+  - diarize.py: pyannote.audio wrapper with HF_TOKEN handling
+    and lazy model load
+  - --diarize / --num-speakers / --min-speakers / --max-speakers
+    flags on the CLI
+  - Captions are NOT diarized (no audio segments); clear notice
+    when this happens
+  - HF_TOKEN missing/invalid: user-actionable error with fix
+    steps, exit code 1
+  - 126 tests passing (was 99 before phase 3)
+
+Smoke tested:
+  - Captions + --diarize: emits "can't be diarized" notice, exits 0
+  - Whisper + --diarize + no HF_TOKEN: full pipeline runs
+    (download, transcribe), then fails cleanly with the
+    user-actionable error message
+  - End-to-end with real pyannote model: requires user to have
+    HF_TOKEN and accepted the EULA (documented in PR #5)
+
+Next: phase 4 (summarization via Ollama cloud).
+
+## Phase 2 status (DONE, merged as PR #4)
 
 Phase 2 complete:
   - SRT writer (HH:MM:SS,mmm timestamps, sequential indices)
@@ -12,8 +37,6 @@ Phase 2 complete:
   - --prefer-captions flag with auto-fallback to Whisper on
     CaptionsUnavailableError or empty caption list
   - 99 tests passing (was 65 before phase 2)
-
-Next: phase 3 (speaker diarization, opt-in).
 
 ## Phase 1 status
 
