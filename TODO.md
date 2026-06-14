@@ -3,26 +3,30 @@
 Living document of known issues, deferred decisions, and "this works but
 isn't great yet." Read this first when resuming work.
 
-## Current phase: 4 (summarization via Ollama cloud)
+## Current phase: 4 (summarization via Ollama cloud) - DONE
 
-Adds `--summarize` flag that calls the Ollama cloud API to
-summarize a transcript after writing it.
+Phase 4 complete:
+  - summarize.py wraps ollama.Client for cloud chat
+  - format_segments_as_text: pure function, speaker-aware
+  - load_default_prompt: reads prompts/default_summary.txt
+    via importlib.resources
+  - OllamaApiKeyMissingError + SummarizationError: clean errors
+  - --summarize / --summary-model / --summary-prompt flags
+  - Writes <video_id>.summary.md sidecar in work dir
+  - Speaker labels preserved in transcript text passed to model
+  - 147 tests passing (was 127 before phase 4)
 
-Order of work:
-  1. prompts/default_summary.txt: default technical-talk summary prompt
-  2. summarize.py: wraps ollama.Client for cloud chat
-     - pure: segments-to-prompt-text formatting (TDD)
-     - ollama.Client wrapper with clear errors for missing
-       OLLAMA_API_KEY, missing model, network errors
-  3. CLI: --summarize / --summary-model / --summary-prompt flags
-     - writes <video_id>.summary.md next to the transcript
-     - speaker-aware formatting when diarization ran
-  4. Smoke test on a real transcript
+Smoke tested:
+  - End-to-end with real video + gpt-oss:120b model: produced
+    a structured 6-section summary (TL;DR, Key claims, Concepts,
+    Open questions, Quotes) with proper speaker attribution
+  - Missing OLLAMA_API_KEY: pipeline runs through transcript,
+    then fails cleanly with actionable error, exit 1
+  - Got an empty response from gpt-oss:20b (model config issue
+    at Ollama's end, not our code) — default is now gpt-oss:120b
+    which works; user can override
 
-Key dependency: ollama (pip). OLLAMA_API_KEY must be set in env
-to authenticate. Default model: gpt-oss:120b. Cloud endpoint:
-https://ollama.com. The user is on a Pro subscription with
-usage-based limits, so calls are fine to make.
+Next: phase 5 (polish, --keep-audio flag, progress bars, etc.)
 
 ## Phase 3 status (DONE, merged as PR #5)
 

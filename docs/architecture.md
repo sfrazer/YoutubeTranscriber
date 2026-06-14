@@ -16,7 +16,10 @@ URL
      yes → assign speaker labels (merge.py) to Whisper segments
      no  → skip
   → output (txt / srt / json)
-  → --summarize? (Ollama cloud, opt-in) [phase 4]
+  → --summarize? (Ollama cloud, opt-in)
+     yes → call ollama.Client.chat() with prompt + segments
+       ok    → write <video_id>.summary.md sidecar
+       fail  → user-actionable error, exit 1
 ```
 
 ## Modules
@@ -31,7 +34,7 @@ URL
 | `diarize.py` | Speaker diarization + assignment | `assign_speakers()` |
 | `merge.py` | Segment/span overlap math | `assign_speakers()` helper |
 | `output.py` | Write txt/srt/json files | `write_transcript()` |
-| `summarize.py` | Call Ollama cloud LLM | `summarize()` |
+| `summarize.py` | Call Ollama cloud LLM | `format_segments_as_text()`, `summarize()` |
 | `prompts/` | Default prompt templates | — |
 
 ## Design principles
