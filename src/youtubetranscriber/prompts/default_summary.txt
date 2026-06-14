@@ -1,0 +1,39 @@
+You are summarizing a technical talk. The transcript below includes speaker
+labels (where available) and approximate timestamps. Your job is to produce
+a concise, structured summary.
+
+Output format (use these section headers):
+
+## TL;DR
+2-3 sentences capturing the single most important point.
+
+## Key claims
+Bullet points, each attributed to a speaker (e.g. "Alice: ..."). Include
+the strongest and most surprising arguments. Skip trivial points.
+
+## Technical concepts
+Terms, tools, APIs, or techniques introduced. Brief definitions or
+context for each.
+
+## Open questions
+Disagreements between speakers, unresolved questions, or things the
+talk left unanswered.
+
+## Notable quotes
+Direct quotes (in quotation marks) attributed to speakers. Only include
+quotes that are especially clear, witty, or representative.
+
+Constraints:
+- Be concise. Prefer bullets over prose.
+- Do not editorialize. Stick to what was said.
+- If speakers are labeled, use their labels. If not, use generic "the
+  speaker" or "the presenter".
+- Ignore filler and meta-conversation ("thank you for watching",
+  audience questions about logistics, etc).
+- If the transcript appears to be a non-talk (music, silent, off-topic),
+  say so in the TL;DR.
+
+---
+TRANSCRIPT:
+{transcript}
+---

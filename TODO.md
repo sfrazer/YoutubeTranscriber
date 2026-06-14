@@ -3,30 +3,38 @@
 Living document of known issues, deferred decisions, and "this works but
 isn't great yet." Read this first when resuming work.
 
-## Current phase: 3 (speaker diarization, opt-in) - DONE
+## Current phase: 4 (summarization via Ollama cloud)
+
+Adds `--summarize` flag that calls the Ollama cloud API to
+summarize a transcript after writing it.
+
+Order of work:
+  1. prompts/default_summary.txt: default technical-talk summary prompt
+  2. summarize.py: wraps ollama.Client for cloud chat
+     - pure: segments-to-prompt-text formatting (TDD)
+     - ollama.Client wrapper with clear errors for missing
+       OLLAMA_API_KEY, missing model, network errors
+  3. CLI: --summarize / --summary-model / --summary-prompt flags
+     - writes <video_id>.summary.md next to the transcript
+     - speaker-aware formatting when diarization ran
+  4. Smoke test on a real transcript
+
+Key dependency: ollama (pip). OLLAMA_API_KEY must be set in env
+to authenticate. Default model: gpt-oss:120b. Cloud endpoint:
+https://ollama.com. The user is on a Pro subscription with
+usage-based limits, so calls are fine to make.
+
+## Phase 3 status (DONE, merged as PR #5)
 
 Phase 3 complete:
   - merge.py: pure function for assigning speakers to segments
-    (max temporal overlap algorithm, 13 tests)
   - diarize.py: pyannote.audio wrapper with HF_TOKEN handling
     and lazy model load
   - --diarize / --num-speakers / --min-speakers / --max-speakers
-    flags on the CLI
-  - Captions are NOT diarized (no audio segments); clear notice
-    when this happens
-  - HF_TOKEN missing/invalid: user-actionable error with fix
-    steps, exit code 1
-  - 126 tests passing (was 99 before phase 3)
-
-Smoke tested:
-  - Captions + --diarize: emits "can't be diarized" notice, exits 0
-  - Whisper + --diarize + no HF_TOKEN: full pipeline runs
-    (download, transcribe), then fails cleanly with the
-    user-actionable error message
-  - End-to-end with real pyannote model: requires user to have
-    HF_TOKEN and accepted the EULA (documented in PR #5)
-
-Next: phase 4 (summarization via Ollama cloud).
+  - Captions skip diarization with a clear notice
+  - HF_TOKEN missing: user-actionable error, exit 1
+  - Smoke tested on real videos (solo + 3-speaker)
+  - 127 tests passing (was 99 before phase 3)
 
 ## Phase 2 status (DONE, merged as PR #4)
 
