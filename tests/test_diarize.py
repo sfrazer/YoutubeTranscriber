@@ -53,11 +53,18 @@ def test_load_pipeline_passes_token_to_pyannote(monkeypatch: pytest.MonkeyPatch)
 
 
 def _make_fake_annotation(spans: list[tuple[float, float, str]]) -> MagicMock:
-    """Build a fake pyannote Annotation that yields (Segment, track, label) tuples."""
+    """Build a fake pyannote DiarizeOutput (pyannote 4.x return type).
+
+    Returns a mock with .speaker_diarization attribute that is the
+    actual annotation with itertracks() method.
+    """
     ann = MagicMock()
     itertracks = MagicMock(return_value=iter(spans))
     ann.itertracks = itertracks
-    return ann
+
+    diarize_output = MagicMock()
+    diarize_output.speaker_diarization = ann
+    return diarize_output
 
 
 def _fake_segment(start: float, end: float) -> MagicMock:
@@ -93,6 +100,36 @@ def test_diarize_returns_speaker_spans(tmp_path: Path, monkeypatch: pytest.Monke
     assert result[1].speaker == "SPEAKER_01"
     assert result[1].start == 2.0
     assert result[1].end == 4.0
+
+
+def test_diarize_handles_legacy_annotation_return(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the pipeline returns a plain Annotation (legacy=True),
+    we should still be able to extract spans from it.
+    """
+    monkeypatch.setenv("HF_TOKEN", "test_token")
+
+    # Build a fake plain Annotation (not DiarizeOutput)
+    fake_ann = MagicMock(spec=["itertracks"])  # spec= prevents auto-attr creation
+    fake_ann.itertracks = MagicMock(
+        return_value=iter(
+            [
+                (_fake_segment(0.0, 1.0), "t", "ALICE"),
+            ]
+        )
+    )
+
+    fake_pipeline = MagicMock()
+    fake_pipeline.return_value = fake_ann  # No .speaker_diarization attribute
+
+    with patch("youtubetranscriber.diarize._load_pipeline", return_value=fake_pipeline):
+        audio = tmp_path / "audio.m4a"
+        audio.write_bytes(b"fake")
+        result = diarize(audio)
+
+    assert len(result) == 1
+    assert result[0].speaker == "ALICE"
 
 
 def test_diarize_passes_audio_path_to_pipeline(

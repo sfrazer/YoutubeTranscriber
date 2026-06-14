@@ -80,8 +80,20 @@ def _load_pipeline() -> Pipeline:
     return pipeline
 
 
-def _annotation_to_spans(annotation) -> list[SpeakerSpan]:
-    """Convert a pyannote Annotation to a list of our SpeakerSpan."""
+def _annotation_to_spans(result) -> list[SpeakerSpan]:
+    """Convert a pyannote diarization result to a list of SpeakerSpan.
+
+    Handles both the new pyannote 4.x DiarizeOutput (which wraps
+    an Annotation in .speaker_diarization) and the legacy Annotation
+    return type (when legacy=True is passed to the pipeline).
+    """
+    # pyannote 4.x returns DiarizeOutput; older versions return Annotation directly
+    annotation = (
+        result.speaker_diarization
+        if hasattr(result, "speaker_diarization")
+        else result
+    )
+
     spans: list[SpeakerSpan] = []
     for segment, _track, label in annotation.itertracks(yield_label=True):
         spans.append(
