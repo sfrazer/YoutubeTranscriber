@@ -35,6 +35,7 @@ URL
 | `merge.py` | Segment/span overlap math | `assign_speakers()` helper |
 | `output.py` | Write txt/srt/json files | `write_transcript()` |
 | `summarize.py` | Call Ollama cloud LLM | `format_segments_as_text()`, `summarize()` |
+| `progress.py` | Rich progress bar wrapper for long steps | `step_progress()` |
 | `prompts/` | Default prompt templates | — |
 
 ## Design principles

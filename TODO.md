@@ -3,25 +3,28 @@
 Living document of known issues, deferred decisions, and "this works but
 isn't great yet." Read this first when resuming work.
 
-## Current phase: 5 (polish)
+## Current phase: 5 (polish) - DONE
 
-Three small improvements:
+Three improvements:
   1. --keep-audio / --no-keep-audio: real working flag.
-     Default: delete audio after successful pipeline (it was
-     intermediate cruft). --keep-audio opts in to keeping the
-     .m4a for re-transcription.
-  2. Progress bars: wrap the long-running operations
-     (download, transcribe, diarize, summarize) in rich.progress
-     so the user has visibility during the 5-15 min pipelines.
-  3. README refresh: rewrite to reflect the actual tool
-     (captions, SRT/JSON, diarize, summarize, all flags).
+     Default: delete audio after success.
+  2. Progress bars: rich.progress wraps every long-running step.
+     Non-TTY auto-detected; no spinners in CI/tests.
+  3. README rewritten: full feature documentation, all flags,
+     optional setup instructions, output examples.
 
-Order:
-  1. Implement --keep-audio with TDD
-  2. Add progress bars
-  3. Rewrite README
-  4. Smoke test
-  5. Commit and push branch
+155 tests passing (was 147 before phase 5).
+
+Smoke tested:
+  - --keep-audio: audio file preserved for re-transcription
+  - default: audio downloaded, transcribed, then deleted
+  - Spinners visible in real terminal (verified via pty),
+    invisible in non-TTY contexts (tests, scripts)
+  - Full captions + summarize + --keep-audio pipeline in 8s
+
+Next: phase 6 (?). No clear next ask; the tool is genuinely
+useful now. Open questions in the deferred list are
+nice-to-haves, not blockers.
 
 ## Phase 4 status (DONE, merged as PR #6)
 
