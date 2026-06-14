@@ -568,3 +568,167 @@ def test_help_includes_diarize_options() -> None:
     assert "--num-speakers" in result.stdout
     assert "--min-speakers" in result.stdout
     assert "--max-speakers" in result.stdout
+
+
+# --- --summarize path -----------------------------------------------------
+
+
+def test_summarize_calls_summarizer_and_writes_sidecar(tmp_path: Path) -> None:
+    """With --summarize, the summarizer runs and a .summary.md is written."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [TranscriptSegment(text="Some transcript content.", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+        patch(
+            "youtubetranscriber.cli.summarize.summarize",
+            return_value="## TL;DR\nTest summary.",
+        ) as sum_mock,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--summarize",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    assert sum_mock.called
+    summary_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.summary.md"
+    assert summary_file.exists()
+    content = summary_file.read_text()
+    assert "Test summary." in content
+    # Header should include the title
+    assert "Sample Video" in content
+
+
+def test_summarize_passes_model_to_summarizer(tmp_path: Path) -> None:
+    """--summary-model should reach the summarizer."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [TranscriptSegment(text="x", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+        patch("youtubetranscriber.cli.summarize.summarize", return_value="ok") as sum_mock,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--summarize",
+                "--summary-model",
+                "gpt-oss:20b",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    assert sum_mock.call_args.kwargs.get("model") == "gpt-oss:20b"
+
+
+def test_summarize_uses_custom_prompt_file(tmp_path: Path) -> None:
+    """--summary-prompt should be read and passed to the summarizer."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [TranscriptSegment(text="x", start=0.0, end=1.0)]
+    custom_prompt = tmp_path / "my_prompt.txt"
+    custom_prompt.write_text("CUSTOM PROMPT: {transcript}")
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+        patch("youtubetranscriber.cli.summarize.summarize", return_value="ok") as sum_mock,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--summarize",
+                "--summary-prompt",
+                str(custom_prompt),
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    passed_prompt = sum_mock.call_args.kwargs.get("prompt")
+    assert passed_prompt == "CUSTOM PROMPT: {transcript}"
+
+
+def test_summarize_skips_when_not_requested(tmp_path: Path) -> None:
+    """Without --summarize, the summarizer is never called."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [TranscriptSegment(text="x", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+        patch("youtubetranscriber.cli.summarize.summarize") as sum_mock,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+            ],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    assert not sum_mock.called
+
+
+def test_summarize_fails_clearly_when_ollama_key_missing(tmp_path: Path) -> None:
+    """Missing OLLAMA_API_KEY produces a clear, actionable error."""
+    from youtubetranscriber.summarize import OllamaApiKeyMissingError
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [TranscriptSegment(text="x", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+        patch(
+            "youtubetranscriber.cli.summarize.summarize",
+            side_effect=OllamaApiKeyMissingError("OLLAMA_API_KEY is not set"),
+        ),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--summarize",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "OLLAMA_API_KEY" in (result.output or "") or "OLLAMA_API_KEY" in (result.stderr or "")
+
+
+def test_help_includes_summarize_options() -> None:
+    result = runner.invoke(app, ["--help"])
+    assert "--summarize" in result.stdout
+    assert "--summary-model" in result.stdout
+    assert "--summary-prompt" in result.stdout

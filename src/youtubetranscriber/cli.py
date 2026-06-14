@@ -18,8 +18,9 @@ from pathlib import Path
 
 import typer
 
-from youtubetranscriber import audio, captions, diarize, merge, output, paths
+from youtubetranscriber import audio, captions, diarize, merge, output, paths, summarize
 from youtubetranscriber.diarize import HfTokenMissingError
+from youtubetranscriber.summarize import OllamaApiKeyMissingError, SummarizationError
 from youtubetranscriber.transcribe import VALID_MODELS, TranscriptSegment
 from youtubetranscriber.transcribe import transcribe as do_transcribe
 
@@ -93,7 +94,20 @@ def transcribe(
     summarize: bool = typer.Option(
         False,
         "--summarize/--no-summarize",
-        help="Generate a summary using Ollama cloud. [phase 4]",
+        help="Generate a summary using Ollama cloud (requires OLLAMA_API_KEY).",
+    ),
+    summary_model: str = typer.Option(
+        "gpt-oss:120b",
+        "--summary-model",
+        help="Ollama cloud model for summarization.",
+    ),
+    summary_prompt: Path | None = typer.Option(  # noqa: B008  (Typer idiom)
+        None,
+        "--summary-prompt",
+        help=(
+            "Path to a custom prompt template (must contain "
+            "{transcript}). Default: the bundled prompt."
+        ),
     ),
     prefer_captions: bool = typer.Option(
         False,
@@ -135,6 +149,9 @@ def transcribe(
         num_speakers=num_speakers,
         min_speakers=min_speakers,
         max_speakers=max_speakers,
+        summarize=summarize,
+        summary_model=summary_model,
+        summary_prompt=summary_prompt,
         interactive=interactive,
         verbose=verbose,
     )
@@ -151,6 +168,9 @@ def _run_pipeline(
     num_speakers: int | None,
     min_speakers: int | None,
     max_speakers: int | None,
+    summarize: bool,
+    summary_model: str,
+    summary_prompt: Path | None,
     interactive: bool,
     verbose: bool,
 ) -> Path:
@@ -194,6 +214,16 @@ def _run_pipeline(
         segments, output_path, format=format, video_id=info.video_id, title=info.title
     )
     typer.echo(f"[ytx] Transcript written to: {output_path}")
+
+    if summarize:
+        _maybe_summarize(
+            segments=segments,
+            work_dir=work_dir,
+            video_id=info.video_id,
+            title=info.title,
+            model=summary_model,
+            prompt_path=summary_prompt,
+        )
 
     return output_path
 
@@ -274,6 +304,41 @@ def _maybe_diarize(
         return segments
 
     return merge.assign_speakers(segments, spans)
+
+
+def _maybe_summarize(
+    *,
+    segments: list[TranscriptSegment],
+    work_dir: Path,
+    video_id: str,
+    title: str,
+    model: str,
+    prompt_path: Path | None,
+) -> None:
+    """Run summarization and write a sidecar .summary.md file.
+
+    Errors are surfaced to the user (printed to stderr, exit 1) so
+    a failed summary doesn't silently leave a missing file.
+    """
+    try:
+        typer.echo(f"[ytx] Generating summary with model={model!r} ...")
+        custom_prompt: str | None = None
+        if prompt_path is not None:
+            custom_prompt = prompt_path.read_text(encoding="utf-8")
+        summary = summarize.summarize(segments, model=model, prompt=custom_prompt)
+    except OllamaApiKeyMissingError as e:
+        typer.echo(f"[ytx] Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    except SummarizationError as e:
+        typer.echo(f"[ytx] Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    summary_path = work_dir / f"{video_id}.summary.md"
+    summary_path.write_text(
+        f"# Summary: {title}\n\n{summary}\n",
+        encoding="utf-8",
+    )
+    typer.echo(f"[ytx] Summary written to: {summary_path}")
 
 
 if __name__ == "__main__":

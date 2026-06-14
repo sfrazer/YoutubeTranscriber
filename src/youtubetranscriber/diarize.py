@@ -88,11 +88,7 @@ def _annotation_to_spans(result) -> list[SpeakerSpan]:
     return type (when legacy=True is passed to the pipeline).
     """
     # pyannote 4.x returns DiarizeOutput; older versions return Annotation directly
-    annotation = (
-        result.speaker_diarization
-        if hasattr(result, "speaker_diarization")
-        else result
-    )
+    annotation = result.speaker_diarization if hasattr(result, "speaker_diarization") else result
 
     spans: list[SpeakerSpan] = []
     for segment, _track, label in annotation.itertracks(yield_label=True):
