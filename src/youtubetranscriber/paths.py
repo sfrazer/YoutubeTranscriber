@@ -60,17 +60,32 @@ def sanitize_title(title: str) -> str:
     return cleaned or _UNTITLED
 
 
+# Safety cap on the indexed-path search. If this many sibling
+# directories all match the same base name, something is very
+# wrong — bail out with a clear error rather than spinning forever.
+_MAX_INDEX_ATTEMPTS = 10_000
+
+
 def _next_indexed_path(base: Path) -> Path:
     """Find the next free 'Name (N)' path after base.
 
     Assumes base itself already exists.
+
+    Raises:
+        RuntimeError: if _MAX_INDEX_ATTEMPTS consecutive candidates
+            are all taken, which indicates an absurd filesystem
+            state rather than a normal conflict.
     """
-    n = 1
-    while True:
+    for n in range(1, _MAX_INDEX_ATTEMPTS + 1):
         candidate = base.parent / f"{base.name} ({n})"
         if not candidate.exists():
             return candidate
-        n += 1
+    raise RuntimeError(
+        f"Could not find a free indexed path for {base} after "
+        f"{_MAX_INDEX_ATTEMPTS} attempts. This usually means an "
+        f"absurd number of conflicting directories exist; please "
+        f"clean up {base.parent}."
+    )
 
 
 def resolve_unique_dir(parent: Path, title: str, *, interactive: bool) -> Path:
