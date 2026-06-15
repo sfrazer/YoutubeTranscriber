@@ -31,8 +31,8 @@ URL
 | `paths.py` | Sanitize titles, resolve unique output dirs | `sanitize_title()`, `resolve_unique_dir()` |
 | `captions.py` | Pull YouTube auto/manual captions | `fetch_captions()` |
 | `transcribe.py` | Run faster-whisper, return segments | `transcribe()` |
-| `diarize.py` | Speaker diarization + assignment | `assign_speakers()` |
-| `merge.py` | Segment/span overlap math | `assign_speakers()` helper |
+| `diarize.py` | Speaker diarization via pyannote | `diarize()` |
+| `merge.py` | Segment/span overlap math; assigns speaker labels | `assign_speakers()` |
 | `output.py` | Write txt/srt/json files | `write_transcript()` |
 | `summarize.py` | Call Ollama cloud LLM | `format_segments_as_text()`, `summarize()` |
 | `progress.py` | Rich progress bar wrapper for long steps | `step_progress()` |

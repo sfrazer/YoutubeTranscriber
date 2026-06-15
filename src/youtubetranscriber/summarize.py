@@ -86,6 +86,11 @@ def _get_client() -> Client:
     client constructor. We still validate it here so we can give
     a user-actionable error.
 
+    Note: caches the client at first call. For the CLI use case this
+    is fine (process is short-lived, env doesn't change). If this is
+    ever used as a library where env vars might be set/unset between
+    calls, drop the cache or key it on os.environ values.
+
     Raises:
         OllamaApiKeyMissingError: if OLLAMA_API_KEY is not set.
     """

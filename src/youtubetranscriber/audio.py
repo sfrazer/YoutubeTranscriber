@@ -14,8 +14,13 @@ from pathlib import Path
 import yt_dlp
 from yt_dlp.utils import DownloadError
 
-# YouTube video IDs are exactly 11 characters from [a-zA-Z0-9_-]
-_VIDEO_ID_PATTERN = re.compile(r"[a-zA-Z0-9_-]{11}")
+# Module-level regex constants. The two matchers are deliberately
+# stricter than a bare "[a-zA-Z0-9_-]{11}" — they require anchoring
+# context (the v= query param or a known path prefix) so that a
+# random 11-char substring elsewhere in a URL can't be mistaken
+# for a video ID.
+_WATCH_ID_RE = re.compile(r"[?&]v=([a-zA-Z0-9_-]{11})(?:[&#]|$)")
+_PATH_ID_RE = re.compile(r"/(?:shorts/|embed/)?([a-zA-Z0-9_-]{11})(?:[/?#]|$)")
 
 
 class InvalidURLError(ValueError):
@@ -24,6 +29,22 @@ class InvalidURLError(ValueError):
 
 class AudioDownloadError(RuntimeError):
     """Raised when yt-dlp fails to download the audio."""
+
+
+@dataclass
+class VideoInfo:
+    """Metadata for a YouTube video, without the downloaded media.
+
+    Returned by get_video_info() when you want to make decisions
+    (e.g. where to put files) before committing to a download.
+
+    Attributes:
+        title: The video's title as reported by yt-dlp.
+        video_id: The 11-character YouTube video ID.
+    """
+
+    title: str
+    video_id: str
 
 
 @dataclass
@@ -70,21 +91,21 @@ def extract_video_id(url: str) -> str:
     # short, embed, and shorts URLs. For watch URLs, it's the v= query.
     # Try the query string first since it's the most common case.
     # The ID must be exactly 11 chars and terminated by &, #, or end of string.
-    match = re.search(r"[?&]v=([a-zA-Z0-9_-]{11})(?:[&#]|$)", url)
+    match = _WATCH_ID_RE.search(url)
     if match:
         return match.group(1)
 
     # Fall back to a path-based match: /ID or /shorts/ID or /embed/ID
     # We require a path segment that is *exactly* 11 chars, not just
     # any 11-char substring (which could match garbage in unrelated paths).
-    path_match = re.search(r"/(?:shorts/|embed/)?([a-zA-Z0-9_-]{11})(?:[/?#]|$)", url)
+    path_match = _PATH_ID_RE.search(url)
     if path_match:
         return path_match.group(1)
 
     raise InvalidURLError(f"Could not extract video ID from: {url!r}")
 
 
-def get_video_info(url: str) -> DownloadResult:
+def get_video_info(url: str) -> VideoInfo:
     """Fetch video metadata (title, id) without downloading the media.
 
     Cheaper than download_audio() — useful when you want to decide
@@ -110,7 +131,7 @@ def get_video_info(url: str) -> DownloadResult:
 
     title = (info or {}).get("title") or video_id
     return_id = (info or {}).get("id") or video_id
-    return DownloadResult(path=Path(""), title=title, video_id=return_id)
+    return VideoInfo(title=title, video_id=return_id)
 
 
 def download_audio(url: str, output_dir: Path) -> DownloadResult:

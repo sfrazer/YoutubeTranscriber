@@ -10,6 +10,10 @@ Phases:
     3. Speaker diarization (opt-in)
     4. Summarization via Ollama cloud
     5. Polish
+
+User-facing status output ("[ytx] ...") goes to stderr so that stdout
+remains free for any future machine-readable output. Transcript content
+is always written to a file (under --output-dir), never to stdout.
 """
 
 from __future__ import annotations
@@ -19,9 +23,10 @@ from pathlib import Path
 import typer
 
 from youtubetranscriber import audio, captions, diarize, merge, output, paths, progress, summarize
+from youtubetranscriber.audio import AudioDownloadError, InvalidURLError, VideoInfo
 from youtubetranscriber.diarize import HfTokenMissingError
 from youtubetranscriber.summarize import OllamaApiKeyMissingError, SummarizationError
-from youtubetranscriber.transcribe import VALID_MODELS, TranscriptSegment
+from youtubetranscriber.transcribe import VALID_MODELS, TranscriptSegment, WhisperModelError
 from youtubetranscriber.transcribe import transcribe as do_transcribe
 
 # Default output directory. Computed once at import time (path is fixed
@@ -34,6 +39,16 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+
+def _status(msg: str) -> None:
+    """Print a user-facing status message to stderr.
+
+    All [ytx] chatter goes to stderr so stdout is reserved for any
+    future machine-readable output and `ytx URL > file.txt` produces
+    an empty file rather than a file full of status noise.
+    """
+    typer.echo(msg, err=True)
 
 
 def _validate_model(value: str) -> str:
@@ -91,7 +106,7 @@ def transcribe(
         "--max-speakers",
         help="Maximum number of speakers for pyannote to consider.",
     ),
-    summarize: bool = typer.Option(
+    summarize_flag: bool = typer.Option(
         False,
         "--summarize/--no-summarize",
         help="Generate a summary using Ollama cloud (requires OLLAMA_API_KEY).",
@@ -144,23 +159,33 @@ def transcribe(
     ),
 ) -> None:
     """Transcribe a YouTube video to text."""
-    _run_pipeline(
-        url=url,
-        model=model,
-        format=format,
-        output_dir=output_dir,
-        prefer_captions=prefer_captions,
-        diarize_flag=diarize_flag,
-        num_speakers=num_speakers,
-        min_speakers=min_speakers,
-        max_speakers=max_speakers,
-        summarize=summarize,
-        summary_model=summary_model,
-        summary_prompt=summary_prompt,
-        keep_audio=keep_audio,
-        interactive=interactive,
-        verbose=verbose,
-    )
+    try:
+        _run_pipeline(
+            url=url,
+            model=model,
+            format=format,
+            output_dir=output_dir,
+            prefer_captions=prefer_captions,
+            diarize_flag=diarize_flag,
+            num_speakers=num_speakers,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+            summarize_flag=summarize_flag,
+            summary_model=summary_model,
+            summary_prompt=summary_prompt,
+            keep_audio=keep_audio,
+            interactive=interactive,
+            verbose=verbose,
+        )
+    except InvalidURLError as e:
+        # Bad URL — surface to the user with a clean message, no traceback.
+        _status(f"[ytx] Error: {e}")
+        raise typer.Exit(code=1) from e
+    except (AudioDownloadError, WhisperModelError) as e:
+        # yt-dlp or Whisper failed — user-actionable (network, video
+        # unavailable, model load failure, etc.). Clean message, exit 1.
+        _status(f"[ytx] Error: {e}")
+        raise typer.Exit(code=1) from e
 
 
 def _run_pipeline(
@@ -174,7 +199,7 @@ def _run_pipeline(
     num_speakers: int | None,
     min_speakers: int | None,
     max_speakers: int | None,
-    summarize: bool,
+    summarize_flag: bool,
     summary_model: str,
     summary_prompt: Path | None,
     keep_audio: bool,
@@ -185,17 +210,17 @@ def _run_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if verbose:
-        typer.echo(f"[ytx] Output root: {output_dir}")
+        _status(f"[ytx] Output root: {output_dir}")
 
     with progress.step_progress(f"Fetching video info from {url}"):
         info = audio.get_video_info(url)
-    typer.echo(f"[ytx] Title: {info.title}")
+    _status(f"[ytx] Title: {info.title}")
 
     work_dir = paths.resolve_unique_dir(output_dir, info.title, interactive=interactive)
     work_dir.mkdir(parents=True, exist_ok=True)
 
     if verbose:
-        typer.echo(f"[ytx] Work dir: {work_dir}")
+        _status(f"[ytx] Work dir: {work_dir}")
 
     segments, audio_path = _obtain_segments(
         url=url,
@@ -205,7 +230,7 @@ def _run_pipeline(
         prefer_captions=prefer_captions,
         verbose=verbose,
     )
-    typer.echo(f"[ytx] Got {len(segments)} segments")
+    _status(f"[ytx] Got {len(segments)} segments")
 
     if diarize_flag:
         segments = _maybe_diarize(
@@ -220,9 +245,9 @@ def _run_pipeline(
     output.write_transcript(
         segments, output_path, format=format, video_id=info.video_id, title=info.title
     )
-    typer.echo(f"[ytx] Transcript written to: {output_path}")
+    _status(f"[ytx] Transcript written to: {output_path}")
 
-    if summarize:
+    if summarize_flag:
         _maybe_summarize(
             segments=segments,
             work_dir=work_dir,
@@ -242,16 +267,16 @@ def _cleanup_audio(audio_path: Path) -> None:
     """Delete the intermediate audio file. Best-effort."""
     try:
         audio_path.unlink(missing_ok=True)
-        typer.echo(f"[ytx] Removed audio file: {audio_path}")
+        _status(f"[ytx] Removed audio file: {audio_path}")
     except OSError as e:
         # Don't fail the whole run just because we couldn't clean up
-        typer.echo(f"[ytx] Warning: could not remove {audio_path}: {e}")
+        _status(f"[ytx] Warning: could not remove {audio_path}: {e}")
 
 
 def _obtain_segments(
     *,
     url: str,
-    info: audio.DownloadResult,
+    info: VideoInfo,
     work_dir: Path,
     model: str,
     prefer_captions: bool,
@@ -265,20 +290,20 @@ def _obtain_segments(
     """
     if prefer_captions:
         try:
-            typer.echo("[ytx] Trying YouTube captions ...")
+            _status("[ytx] Trying YouTube captions ...")
             segments = captions.fetch_captions(info.video_id)
             if segments:
-                typer.echo(f"[ytx] Got {len(segments)} caption segments")
+                _status(f"[ytx] Got {len(segments)} caption segments")
                 return segments, None
             # Empty list is technically not an error, but a video with
             # no caption segments is useless. Fall through to Whisper.
-            typer.echo("[ytx] No caption segments found; falling back to Whisper")
+            _status("[ytx] No caption segments found; falling back to Whisper")
         except captions.CaptionsUnavailableError as e:
-            typer.echo(f"[ytx] Captions unavailable: {e}")
-            typer.echo("[ytx] Falling back to Whisper")
+            _status(f"[ytx] Captions unavailable: {e}")
+            _status("[ytx] Falling back to Whisper")
     with progress.step_progress("Downloading audio"):
         result = audio.download_audio(url, work_dir)
-    typer.echo(f"[ytx] Audio saved to: {result.path}")
+    _status(f"[ytx] Audio saved to: {result.path}")
 
     # Enable faster-whisper's internal tqdm progress for segment-level
     # granularity. log_progress=True only takes effect when stdout is a
@@ -303,7 +328,7 @@ def _maybe_diarize(
     error.
     """
     if audio_path is None:
-        typer.echo(
+        _status(
             "[ytx] Note: --diarize requires audio; caption-sourced "
             "transcripts can't be diarized. Skipping."
         )
@@ -320,11 +345,11 @@ def _maybe_diarize(
     except HfTokenMissingError as e:
         # Print the user-actionable error message and exit non-zero.
         # The HfTokenMissingError message itself explains how to fix it.
-        typer.echo(f"[ytx] Error: {e}", err=True)
+        _status(f"[ytx] Error: {e}")
         raise typer.Exit(code=1) from e
 
     if not spans:
-        typer.echo("[ytx] Diarization found no speakers")
+        _status("[ytx] Diarization found no speakers")
         return segments
 
     return merge.assign_speakers(segments, spans)
@@ -351,10 +376,10 @@ def _maybe_summarize(
         with progress.step_progress(f"Generating summary with model={model!r}"):
             summary = summarize.summarize(segments, model=model, prompt=custom_prompt)
     except OllamaApiKeyMissingError as e:
-        typer.echo(f"[ytx] Error: {e}", err=True)
+        _status(f"[ytx] Error: {e}")
         raise typer.Exit(code=1) from e
     except SummarizationError as e:
-        typer.echo(f"[ytx] Error: {e}", err=True)
+        _status(f"[ytx] Error: {e}")
         raise typer.Exit(code=1) from e
 
     summary_path = work_dir / f"{video_id}.summary.md"
@@ -362,7 +387,7 @@ def _maybe_summarize(
         f"# Summary: {title}\n\n{summary}\n",
         encoding="utf-8",
     )
-    typer.echo(f"[ytx] Summary written to: {summary_path}")
+    _status(f"[ytx] Summary written to: {summary_path}")
 
 
 if __name__ == "__main__":

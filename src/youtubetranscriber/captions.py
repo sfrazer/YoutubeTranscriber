@@ -9,12 +9,6 @@ hierarchy.
 from __future__ import annotations
 
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import (
-    NoTranscriptFound,
-    TranscriptsDisabled,
-    VideoUnavailable,
-    VideoUnplayable,
-)
 
 from youtubetranscriber.transcribe import TranscriptSegment
 
@@ -55,18 +49,21 @@ def fetch_captions(
     if languages is None:
         languages = ["en"]
 
+    # youtube-transcript-api exposes its exception hierarchy only via
+    # the private _errors submodule, which is not part of the public
+    # API and could change between minor releases. We deliberately
+    # catch every failure mode (specific transcript errors, network
+    # errors, HTTP errors, parsing errors) and collapse it into
+    # CaptionsUnavailableError. Any new failure type the library
+    # adds will land here too, which is the intended behavior —
+    # any failure means "fall through to Whisper."
     try:
         api = YouTubeTranscriptApi()
         snippets = api.fetch(video_id, languages=languages)
-    except (NoTranscriptFound, TranscriptsDisabled, VideoUnavailable, VideoUnplayable) as e:
-        # The "expected" failure modes — signal fall-through to Whisper
-        raise CaptionsUnavailableError(
-            f"No captions available for {video_id} (languages={languages}): {e}"
-        ) from e
     except Exception as e:
-        # Catch-all for network errors, HTTP errors, parsing errors, etc.
-        # We don't want a transient network blip to crash the whole run.
-        raise CaptionsUnavailableError(f"Failed to fetch captions for {video_id}: {e}") from e
+        raise CaptionsUnavailableError(
+            f"Failed to fetch captions for {video_id} (languages={languages}): {e}"
+        ) from e
 
     return [
         TranscriptSegment(
