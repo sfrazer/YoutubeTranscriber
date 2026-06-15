@@ -3,7 +3,30 @@
 Living document of known issues, deferred decisions, and "this works but
 isn't great yet." Read this first when resuming work.
 
-## Current phase: 4 (summarization via Ollama cloud) - DONE
+## Current phase: 5 (polish) - DONE
+
+Three improvements:
+  1. --keep-audio / --no-keep-audio: real working flag.
+     Default: delete audio after success.
+  2. Progress bars: rich.progress wraps every long-running step.
+     Non-TTY auto-detected; no spinners in CI/tests.
+  3. README rewritten: full feature documentation, all flags,
+     optional setup instructions, output examples.
+
+155 tests passing (was 147 before phase 5).
+
+Smoke tested:
+  - --keep-audio: audio file preserved for re-transcription
+  - default: audio downloaded, transcribed, then deleted
+  - Spinners visible in real terminal (verified via pty),
+    invisible in non-TTY contexts (tests, scripts)
+  - Full captions + summarize + --keep-audio pipeline in 8s
+
+Next: phase 6 (?). No clear next ask; the tool is genuinely
+useful now. Open questions in the deferred list are
+nice-to-haves, not blockers.
+
+## Phase 4 status (DONE, merged as PR #6)
 
 Phase 4 complete:
   - summarize.py wraps ollama.Client for cloud chat
@@ -25,8 +48,6 @@ Smoke tested:
   - Got an empty response from gpt-oss:20b (model config issue
     at Ollama's end, not our code) — default is now gpt-oss:120b
     which works; user can override
-
-Next: phase 5 (polish, --keep-audio flag, progress bars, etc.)
 
 ## Phase 3 status (DONE, merged as PR #5)
 

@@ -85,6 +85,8 @@ def transcribe(
     audio_path: Path,
     model_name: str = "medium",
     device: str | None = None,
+    *,
+    log_progress: bool = False,
 ) -> list[TranscriptSegment]:
     """Transcribe an audio file to a list of TranscriptSegment.
 
@@ -93,6 +95,10 @@ def transcribe(
         model_name: Whisper model size. Must be one of VALID_MODELS.
             Default "medium" is a good speed/quality balance.
         device: "cpu", "mps", or "cuda". If None, auto-detect.
+        log_progress: Whether to show faster-whisper's internal
+            tqdm progress bar. Only takes effect when stdout is a
+            TTY (tqdm auto-disables in non-TTY). Safe to always
+            pass True.
 
     Returns:
         List of TranscriptSegment with text, start, end, and speaker=None.
@@ -137,6 +143,7 @@ def transcribe(
             str(audio_path),
             beam_size=5,
             vad_filter=True,  # skip silence, much faster on long files
+            log_progress=log_progress,
         )
         # faster-whisper returns a generator; materialize to list
         raw_segments = list(segments_iter)

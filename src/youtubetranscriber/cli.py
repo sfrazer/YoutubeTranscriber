@@ -18,7 +18,7 @@ from pathlib import Path
 
 import typer
 
-from youtubetranscriber import audio, captions, diarize, merge, output, paths, summarize
+from youtubetranscriber import audio, captions, diarize, merge, output, paths, progress, summarize
 from youtubetranscriber.diarize import HfTokenMissingError
 from youtubetranscriber.summarize import OllamaApiKeyMissingError, SummarizationError
 from youtubetranscriber.transcribe import VALID_MODELS, TranscriptSegment
@@ -123,7 +123,12 @@ def transcribe(
     keep_audio: bool = typer.Option(
         False,
         "--keep-audio/--no-keep-audio",
-        help="Keep downloaded audio file after transcription. [phase 5]",
+        help=(
+            "Keep the downloaded .m4a audio file alongside the "
+            "transcript. Default: delete it (the audio is intermediate; "
+            "use this flag if you plan to re-transcribe with a different "
+            "model)."
+        ),
     ),
     interactive: bool = typer.Option(
         False,
@@ -152,6 +157,7 @@ def transcribe(
         summarize=summarize,
         summary_model=summary_model,
         summary_prompt=summary_prompt,
+        keep_audio=keep_audio,
         interactive=interactive,
         verbose=verbose,
     )
@@ -171,6 +177,7 @@ def _run_pipeline(
     summarize: bool,
     summary_model: str,
     summary_prompt: Path | None,
+    keep_audio: bool,
     interactive: bool,
     verbose: bool,
 ) -> Path:
@@ -180,8 +187,8 @@ def _run_pipeline(
     if verbose:
         typer.echo(f"[ytx] Output root: {output_dir}")
 
-    typer.echo(f"[ytx] Fetching video info from {url} ...")
-    info = audio.get_video_info(url)
+    with progress.step_progress(f"Fetching video info from {url}"):
+        info = audio.get_video_info(url)
     typer.echo(f"[ytx] Title: {info.title}")
 
     work_dir = paths.resolve_unique_dir(output_dir, info.title, interactive=interactive)
@@ -225,7 +232,20 @@ def _run_pipeline(
             prompt_path=summary_prompt,
         )
 
+    if not keep_audio and audio_path is not None:
+        _cleanup_audio(audio_path)
+
     return output_path
+
+
+def _cleanup_audio(audio_path: Path) -> None:
+    """Delete the intermediate audio file. Best-effort."""
+    try:
+        audio_path.unlink(missing_ok=True)
+        typer.echo(f"[ytx] Removed audio file: {audio_path}")
+    except OSError as e:
+        # Don't fail the whole run just because we couldn't clean up
+        typer.echo(f"[ytx] Warning: could not remove {audio_path}: {e}")
 
 
 def _obtain_segments(
@@ -256,12 +276,16 @@ def _obtain_segments(
         except captions.CaptionsUnavailableError as e:
             typer.echo(f"[ytx] Captions unavailable: {e}")
             typer.echo("[ytx] Falling back to Whisper")
-    typer.echo("[ytx] Downloading audio ...")
-    result = audio.download_audio(url, work_dir)
+    with progress.step_progress("Downloading audio"):
+        result = audio.download_audio(url, work_dir)
     typer.echo(f"[ytx] Audio saved to: {result.path}")
 
-    typer.echo(f"[ytx] Transcribing with model={model!r} ...")
-    return do_transcribe(result.path, model_name=model), result.path
+    # Enable faster-whisper's internal tqdm progress for segment-level
+    # granularity. log_progress=True only takes effect when stdout is a
+    # TTY (tqdm checks isatty), so it's safe to always pass True.
+    with progress.step_progress(f"Transcribing with model={model!r}"):
+        segments = do_transcribe(result.path, model_name=model, log_progress=True)
+    return segments, result.path
 
 
 def _maybe_diarize(
@@ -286,13 +310,13 @@ def _maybe_diarize(
         return segments
 
     try:
-        typer.echo("[ytx] Running speaker diarization ...")
-        spans = diarize.diarize(
-            audio_path,
-            num_speakers=num_speakers,
-            min_speakers=min_speakers,
-            max_speakers=max_speakers,
-        )
+        with progress.step_progress("Running speaker diarization"):
+            spans = diarize.diarize(
+                audio_path,
+                num_speakers=num_speakers,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+            )
     except HfTokenMissingError as e:
         # Print the user-actionable error message and exit non-zero.
         # The HfTokenMissingError message itself explains how to fix it.
@@ -321,11 +345,11 @@ def _maybe_summarize(
     a failed summary doesn't silently leave a missing file.
     """
     try:
-        typer.echo(f"[ytx] Generating summary with model={model!r} ...")
         custom_prompt: str | None = None
         if prompt_path is not None:
             custom_prompt = prompt_path.read_text(encoding="utf-8")
-        summary = summarize.summarize(segments, model=model, prompt=custom_prompt)
+        with progress.step_progress(f"Generating summary with model={model!r}"):
+            summary = summarize.summarize(segments, model=model, prompt=custom_prompt)
     except OllamaApiKeyMissingError as e:
         typer.echo(f"[ytx] Error: {e}", err=True)
         raise typer.Exit(code=1) from e
