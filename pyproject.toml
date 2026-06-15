@@ -47,10 +47,12 @@ select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
 ignore = [
     "E501",  # line length handled by formatter
 ]
-# Allow the CLI to declare forward-compat flags for future phases
-# (diarize, summarize, prefer_captions, keep_audio) that are not yet
-# consumed in the pipeline.
-per-file-ignores = { "src/youtubetranscriber/cli.py" = ["ARG", "A002"] }
+# Note: the `format` parameter in cli.py shadows the builtin. It's
+# kept intentionally for CLI ergonomics: `--format` is the universal
+# flag name for output format selection. The A002 (flake8-builtins)
+# and ARG (flake8-unused-arguments) rule families are not in the
+# global `select` list above, so this shadow isn't linted. Don't add
+# them without revisiting this trade-off.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

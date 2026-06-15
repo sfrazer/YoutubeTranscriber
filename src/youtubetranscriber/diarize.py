@@ -40,6 +40,13 @@ class HfTokenMissingError(RuntimeError):
 def _load_pipeline() -> Pipeline:
     """Load (and cache) the pyannote diarization pipeline.
 
+    Note: caches the pipeline at first call. For the CLI use case
+    this is fine (process is short-lived, env doesn't change, and
+    the pipeline is expensive to re-instantiate — it downloads
+    hundreds of MB on first use). If this is ever used as a library
+    where env vars might be set/unset between calls, drop the cache
+    or key it on os.environ values.
+
     Raises:
         HfTokenMissingError: if HF_TOKEN env var is not set.
     """
