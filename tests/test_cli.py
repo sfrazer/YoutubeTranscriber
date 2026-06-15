@@ -3,23 +3,29 @@
 Real behavior tests live with their respective modules. These tests catch
 regressions in the CLI surface (typer schema, help text, import-time
 side effects) and verify the end-to-end pipeline wiring.
+
+Note: user-facing [ytx] status messages go to stderr (not stdout),
+so we assert on result.stderr for those. stdout is reserved for
+typer's --help screen and any future machine-readable output.
 """
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from youtubetranscriber.audio import DownloadResult
+from youtubetranscriber.audio import DownloadResult, VideoInfo
 from youtubetranscriber.cli import app
 
 runner = CliRunner()
 
 
-def _fake_info(title: str = "Sample Video", video_id: str = "dQw4w9WgXcQ") -> DownloadResult:
-    return DownloadResult(path=Path(""), title=title, video_id=video_id)
+def _fake_info(title: str = "Sample Video", video_id: str = "dQw4w9WgXcQ") -> VideoInfo:
+    return VideoInfo(title=title, video_id=video_id)
 
 
 def _fake_audio_result(tmp_path: Path, video_id: str = "dQw4w9WgXcQ") -> DownloadResult:
@@ -53,7 +59,8 @@ def test_help_includes_all_options():
 def test_invalid_model_rejected():
     result = runner.invoke(app, ["https://youtu.be/dQw4w9WgXcQ", "--model", "huge"])
     assert result.exit_code != 0
-    assert "Invalid model" in result.stdout or "Invalid model" in (result.output or "")
+    # typer's BadParameter message comes via its own output stream
+    assert "Invalid model" in (result.output or "")
 
 
 def test_invalid_format_rejected():
@@ -65,6 +72,30 @@ def test_invalid_url_rejected():
     """Bad URLs should fail with InvalidURLError, not crash."""
     result = runner.invoke(app, ["not a url"])
     assert result.exit_code != 0
+    # Status messages go to stderr — the user-actionable error should be there,
+    # not a Python traceback.
+    assert "Not a YouTube URL" in (result.stderr or "")
+
+
+def test_invalid_url_no_traceback_in_real_subprocess(tmp_path: Path) -> None:
+    """Real subprocess (no catch_exceptions) should show clean error, not traceback.
+
+    CliRunner's catch_exceptions=True masks the original bug where
+    InvalidURLError leaked as a Python traceback. This test runs the
+    CLI as a real subprocess to verify the user-facing behavior.
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "youtubetranscriber.cli", "not a url", "--output-dir", str(tmp_path)],
+        capture_output=True,
+        text=True,
+    )
+    # Exit code is non-zero
+    assert result.returncode != 0
+    # Combined output should NOT contain a Python traceback
+    combined = result.stdout + result.stderr
+    assert "Traceback" not in combined
+    # The user-actionable error message should be visible
+    assert "Not a YouTube URL" in combined
 
 
 # --- End-to-end with mocked pipeline ---------------------------------------
@@ -88,13 +119,14 @@ def test_end_to_end_uses_title_named_dir(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout + (result.output or "")
+    assert result.exit_code == 0, result.stderr
     # The directory is named after the title, the file inside is named
     # after the video ID.
     assert (tmp_path / "Sample Video").exists()
     out_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt"
     assert out_file.exists()
-    assert "Transcript written to" in result.stdout
+    # Status messages go to stderr
+    assert "Transcript written to" in (result.stderr or "")
 
 
 def test_end_to_end_writes_segments(tmp_path: Path) -> None:
@@ -121,7 +153,7 @@ def test_end_to_end_writes_segments(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     out_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt"
     content = out_file.read_text()
     assert "Hello world." in content
@@ -148,7 +180,8 @@ def test_verbose_flag_prints_title(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0
-    assert "Sample Video" in result.stdout
+    # Title appears on stderr
+    assert "Sample Video" in (result.stderr or "")
 
 
 def test_existing_dir_gets_indexed(tmp_path: Path, monkeypatch) -> None:
@@ -174,7 +207,7 @@ def test_existing_dir_gets_indexed(tmp_path: Path, monkeypatch) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     assert (tmp_path / "Sample Video (1)").exists()
     # Original pre-existing dir is untouched (no transcript file added to it)
     assert not (tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt").exists()
@@ -201,7 +234,7 @@ def test_unsafe_title_gets_sanitized(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     # Should sanitize to "Cool_Video_ Part 1_" then strip trailing _ and collapse
     # We don't assert the exact string here; just that the dir was created
     # and didn't blow up.
@@ -240,7 +273,7 @@ def test_prefer_captions_uses_captions_when_available(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     assert fetch_mock.called
     # Crucial: download_audio and do_transcribe should NOT have been called
     assert not dl_mock.called, "download_audio should be skipped with --prefer-captions"
@@ -278,11 +311,12 @@ def test_prefer_captions_falls_back_to_whisper(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     assert fetch_mock.called
     # Fall through happened
     assert dl_mock.called
-    assert "Falling back to Whisper" in result.stdout
+    # Status message on stderr
+    assert "Falling back to Whisper" in (result.stderr or "")
 
     out_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt"
     content = out_file.read_text()
@@ -312,11 +346,11 @@ def test_prefer_captions_falls_back_on_empty_captions(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     # Both messages (CaptionsUnavailable and empty captions) emit
     # "falling back to Whisper" (capitalization varies at the start
     # of the sentence, so we case-fold the whole comparison).
-    assert "falling back to whisper" in result.stdout.lower()
+    assert "falling back to whisper" in (result.stderr or "").lower()
 
 
 def test_without_prefer_captions_skips_captions(tmp_path: Path) -> None:
@@ -338,7 +372,7 @@ def test_without_prefer_captions_skips_captions(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     # captions.fetch_captions should NOT have been called
     assert not fetch_mock.called
 
@@ -378,7 +412,7 @@ def test_end_to_end_writes_srt(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     out_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.srt"
     assert out_file.exists()
     content = out_file.read_text()
@@ -411,7 +445,7 @@ def test_end_to_end_writes_json_with_metadata(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     out_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.json"
     data = json.loads(out_file.read_text())
     assert data["video_id"] == "dQw4w9WgXcQ"
@@ -453,7 +487,7 @@ def test_diarize_assigns_speakers_to_whisper_segments(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     out_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt"
     content = out_file.read_text()
     # txt writer prefixes speakers in brackets
@@ -488,14 +522,14 @@ def test_diarize_skips_when_segments_came_from_captions(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     # Diarization should NOT have been called
     assert not diarize_mock.called
     # Whisper and download also not called
     assert not whisper_mock.called
     assert not dl_mock.called
-    # The notice should appear
-    assert "can't be diarized" in result.stdout
+    # The notice should appear on stderr
+    assert "can't be diarized" in (result.stderr or "")
 
 
 def test_diarize_fails_clearly_when_hf_token_missing(tmp_path: Path) -> None:
@@ -528,7 +562,7 @@ def test_diarize_fails_clearly_when_hf_token_missing(tmp_path: Path) -> None:
     # The exception should propagate to the user (non-zero exit)
     assert result.exit_code != 0
     # The user-actionable error should be printed to stderr
-    assert "HF_TOKEN" in (result.output or "") or "HF_TOKEN" in (result.stderr or "")
+    assert "HF_TOKEN" in (result.stderr or "")
 
 
 def test_diarize_passes_num_speakers(tmp_path: Path) -> None:
@@ -556,7 +590,7 @@ def test_diarize_passes_num_speakers(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     diarize_mock.assert_called_once()
     call_kwargs = diarize_mock.call_args.kwargs
     assert call_kwargs.get("num_speakers") == 3
@@ -599,7 +633,7 @@ def test_summarize_calls_summarizer_and_writes_sidecar(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     assert sum_mock.called
     summary_file = tmp_path / "Sample Video" / "dQw4w9WgXcQ.summary.md"
     assert summary_file.exists()
@@ -634,7 +668,7 @@ def test_summarize_passes_model_to_summarizer(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     assert sum_mock.call_args.kwargs.get("model") == "gpt-oss:20b"
 
 
@@ -665,7 +699,7 @@ def test_summarize_uses_custom_prompt_file(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     passed_prompt = sum_mock.call_args.kwargs.get("prompt")
     assert passed_prompt == "CUSTOM PROMPT: {transcript}"
 
@@ -692,7 +726,7 @@ def test_summarize_skips_when_not_requested(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     assert not sum_mock.called
 
 
@@ -724,7 +758,7 @@ def test_summarize_fails_clearly_when_ollama_key_missing(tmp_path: Path) -> None
         )
 
     assert result.exit_code != 0
-    assert "OLLAMA_API_KEY" in (result.output or "") or "OLLAMA_API_KEY" in (result.stderr or "")
+    assert "OLLAMA_API_KEY" in (result.stderr or "")
 
 
 def test_help_includes_summarize_options() -> None:
@@ -758,7 +792,7 @@ def test_default_deletes_audio_file(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     # Audio file should be gone
     assert not fake_audio.path.exists()
     # But the transcript should still be there
@@ -787,7 +821,7 @@ def test_keep_audio_preserves_audio_file(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     # Audio file should still be there
     assert fake_audio.path.exists()
     # And the transcript too
@@ -816,7 +850,7 @@ def test_no_keep_audio_explicit_works(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     assert not fake_audio.path.exists()
 
 
@@ -843,6 +877,6 @@ def test_captions_path_does_not_error_on_audio_cleanup(tmp_path: Path) -> None:
             ],
         )
 
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.stderr
     # The cleanup should not have failed; transcript exists
     assert (tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt").exists()
