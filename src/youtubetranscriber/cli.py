@@ -66,6 +66,27 @@ def _validate_format(value: str) -> str:
     return value
 
 
+def _validate_summary_prompt(value: Path | None) -> Path | None:
+    """Validate --summary-prompt eagerly so a typo fails before any work.
+
+    Without this, a missing prompt file would only surface as a
+    FileNotFoundError raised from deep inside _maybe_summarize(),
+    after the pipeline has already done network IO. Checking up front
+    also lets typer format the error with its standard BadParameter
+    presentation, consistent with _validate_model / _validate_format.
+
+    The callback receives None when --summary-prompt is not supplied
+    (the default), so we must short-circuit before touching the path.
+    """
+    if value is None:
+        return None
+    if not value.exists():
+        raise typer.BadParameter(f"Summary prompt file not found: {value}")
+    if not value.is_file():
+        raise typer.BadParameter(f"Summary prompt path is not a file: {value}")
+    return value
+
+
 @app.command()
 def transcribe(
     url: str = typer.Argument(..., help="YouTube video URL"),
@@ -123,6 +144,7 @@ def transcribe(
             "Path to a custom prompt template (must contain "
             "{transcript}). Default: the bundled prompt."
         ),
+        callback=_validate_summary_prompt,
     ),
     prefer_captions: bool = typer.Option(
         False,
@@ -372,7 +394,14 @@ def _maybe_summarize(
     try:
         custom_prompt: str | None = None
         if prompt_path is not None:
-            custom_prompt = prompt_path.read_text(encoding="utf-8")
+            # TOCTOU defense: the path was validated eagerly by
+            # _validate_summary_prompt at argument-parsing time, but
+            # the file could have been deleted between then and now.
+            try:
+                custom_prompt = prompt_path.read_text(encoding="utf-8")
+            except FileNotFoundError as e:
+                _status(f"[ytx] Error: summary prompt file disappeared: {prompt_path}")
+                raise typer.Exit(code=1) from e
         with progress.step_progress(f"Generating summary with model={model!r}"):
             summary = summarize.summarize(segments, model=model, prompt=custom_prompt)
     except OllamaApiKeyMissingError as e:
