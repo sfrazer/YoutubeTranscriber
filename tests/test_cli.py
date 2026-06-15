@@ -704,6 +704,120 @@ def test_summarize_uses_custom_prompt_file(tmp_path: Path) -> None:
     assert passed_prompt == "CUSTOM PROMPT: {transcript}"
 
 
+def test_missing_summary_prompt_fails_fast(tmp_path: Path) -> None:
+    """A bad --summary-prompt path should fail at argument parsing,
+    before any pipeline work is done. Regression test for a bug where
+    a missing file surfaced as a FileNotFoundError traceback from
+    deep inside _maybe_summarize, after audio download.
+    """
+    missing = tmp_path / "does_not_exist.txt"
+
+    # The pipeline should NOT be called — validation must fail first.
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info") as info_mock,
+        patch("youtubetranscriber.cli.audio.download_audio") as dl_mock,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--summarize",
+                "--summary-prompt",
+                str(missing),
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert not info_mock.called
+    assert not dl_mock.called
+    # typer's BadParameter message includes the path (possibly
+    # wrapped across lines by the rich box drawing), so we normalize
+    # whitespace before checking. macOS resolves tmp_path via /private/var
+    # so we match on the filename rather than the full resolved path.
+    combined = ((result.output or "") + (result.stderr or "")).replace("\n", " ")
+    assert "summary prompt" in combined.lower()
+    assert "not found" in combined.lower()
+    assert missing.name in combined
+    # Critically: no Python traceback
+    assert "Traceback" not in combined
+
+
+def test_summary_prompt_path_to_directory_rejected(tmp_path: Path) -> None:
+    """--summary-prompt pointing at a directory (not a file) is rejected."""
+    not_a_file = tmp_path / "a_directory"
+    not_a_file.mkdir()
+
+    with patch("youtubetranscriber.cli.audio.get_video_info") as info_mock:
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--summarize",
+                "--summary-prompt",
+                str(not_a_file),
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert not info_mock.called
+
+
+def test_summary_prompt_vanished_between_validate_and_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """TOCTOU: if the prompt file is deleted after argument validation
+    but before _maybe_summarize reads it, we should fail cleanly with
+    a [ytx] Error message rather than a traceback.
+    """
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    fake_audio = _fake_audio_result(tmp_path)
+    fake_segments = [TranscriptSegment(text="x", start=0.0, end=1.0)]
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("PROMPT: {transcript}")
+
+    # Simulate the file vanishing between the eager validate (in the
+    # callback, which only calls .exists()/.is_file()) and the read
+    # inside _maybe_summarize. The first read_text call is the one
+    # we want to fail.
+    real_read_text = Path.read_text
+    call_count = {"n": 0}
+
+    def maybe_vanish(self, *args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] >= 1:
+            raise FileNotFoundError(f"simulated disappearance: {self}")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", maybe_vanish)
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info", return_value=_fake_info()),
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--summarize",
+                "--summary-prompt",
+                str(prompt),
+            ],
+        )
+
+    assert result.exit_code != 0
+    # Clean user-facing error, no traceback
+    assert "Traceback" not in (result.stderr or "")
+    assert "disappeared" in (result.stderr or "").lower()
+
+
 def test_summarize_skips_when_not_requested(tmp_path: Path) -> None:
     """Without --summarize, the summarizer is never called."""
     from youtubetranscriber.transcribe import TranscriptSegment
