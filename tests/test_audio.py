@@ -168,6 +168,71 @@ def test_download_audio_wraps_yt_dlp_errors(tmp_path: Path) -> None:
         download_audio("https://youtu.be/dQw4w9WgXcQ", tmp_path)
 
 
+def test_download_audio_detects_gate_page_by_id_shape(tmp_path: Path) -> None:
+    """yt-dlp returns a 24-char channel id when YouTube hands back a gate page.
+
+    Real video ids are exactly 11 chars. A 24-char id starting with
+    'UC' is a channel id and signals that the response is a gate,
+    not the video. We should raise a clear AudioDownloadError
+    rather than fall through to 'file not found'.
+    """
+    fake_ydl = MagicMock()
+    fake_ydl_class = MagicMock(return_value=fake_ydl)
+    fake_ydl_class.return_value.__enter__.return_value.extract_info.return_value = {
+        "id": "UCK5afNL1HiwIYiNloPN4rsg",  # 24-char channel id
+        "title": "⬇️ Press Subscribe to continue.",
+    }
+
+    with (
+        patch("youtubetranscriber.audio.yt_dlp.YoutubeDL", fake_ydl_class),
+        pytest.raises(AudioDownloadError, match="gate page"),
+    ):
+        download_audio("https://www.youtube.com/watch?v=wykPErJ8M-8", tmp_path)
+
+
+def test_download_audio_detects_gate_page_by_title(tmp_path: Path) -> None:
+    """A real-looking 11-char id can still be a gate page; check the title too.
+
+    Some gate variants return an 11-char id with a recognizable
+    phrase in the title. The phrase check catches those.
+    """
+    fake_ydl = MagicMock()
+    fake_ydl_class = MagicMock(return_value=fake_ydl)
+    fake_ydl_class.return_value.__enter__.return_value.extract_info.return_value = {
+        "id": "wykPErJ8M-8",  # 11 chars, would pass the id check
+        "title": "Sign in to confirm your age",
+    }
+
+    with (
+        patch("youtubetranscriber.audio.yt_dlp.YoutubeDL", fake_ydl_class),
+        pytest.raises(AudioDownloadError, match="gate page"),
+    ):
+        download_audio("https://www.youtube.com/watch?v=wykPErJ8M-8", tmp_path)
+
+
+def test_download_audio_does_not_flag_real_video(tmp_path: Path) -> None:
+    """A real-looking id and title should NOT be flagged as a gate page.
+
+    Negative test for the gate detection — make sure we're not
+    false-positive on real videos with unusual titles.
+    """
+    expected_path = tmp_path / "Some Video [dQw4w9WgXcQ].m4a"
+    fake_ydl = MagicMock()
+    fake_ydl_class = MagicMock(return_value=fake_ydl)
+    fake_ydl_class.return_value.__enter__.return_value.prepare_filename.return_value = str(
+        expected_path.with_suffix("")
+    )
+    fake_ydl_class.return_value.__enter__.return_value.extract_info.return_value = {
+        "id": "dQw4w9WgXcQ",
+        "title": "Some Video",
+    }
+
+    with patch("youtubetranscriber.audio.yt_dlp.YoutubeDL", fake_ydl_class):
+        expected_path.write_bytes(b"fake audio")
+        result = download_audio("https://youtu.be/dQw4w9WgXcQ", tmp_path)
+
+    assert result.video_id == "dQw4w9WgXcQ"
+
 def test_get_video_info_returns_metadata(tmp_path: Path) -> None:
     """get_video_info should fetch title/id without downloading."""
     fake_ydl = MagicMock()

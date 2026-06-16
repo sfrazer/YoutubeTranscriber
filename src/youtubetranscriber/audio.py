@@ -172,6 +172,41 @@ def get_video_info(url: str) -> VideoInfo:
     return VideoInfo(title=title, video_id=return_id)
 
 
+def _looks_like_gate_page(info: dict) -> bool:
+    """Heuristic: did yt-dlp return a YouTube gate page instead of a real video?
+
+    YouTube sometimes returns a consent / age / sign-in page rather
+    than the requested video. yt-dlp will often succeed at fetching
+    the page (no exception raised) but the result has telltale
+    shapes: the id field is a 24-char channel id (UCxxx...) instead
+    of an 11-char video id, and/or the title contains a known gate
+    phrase.
+
+    Best-effort. If YouTube adds a new gate variant we don't
+    recognize, this falls through to the existing 'file not found'
+    path, which is no worse than today.
+    """
+    vid = info.get("id") or ""
+    title = (info.get("title") or "").lower()
+    # YouTube channel IDs are 24 chars and start with 'UC'; real
+    # video IDs are exactly 11 chars. This is the most reliable
+    # signal because it doesn't depend on YouTube's phrasing.
+    if not isinstance(vid, str) or len(vid) != 11:
+        return True
+    # Phrase list, lower-cased substring match. Catches variations
+    # the ID check misses (e.g. a real-looking ID with a gate title).
+    gate_phrases = (
+        "subscribe to continue",
+        "sign in to confirm",
+        "sign in to continue",
+        "confirm your age",
+        "video unavailable",
+        "this video is not available",
+        "cookies",
+    )
+    return any(phrase in title for phrase in gate_phrases)
+
+
 def download_audio(url: str, output_dir: Path) -> DownloadResult:
     """Download audio only from a YouTube URL to output_dir.
 
@@ -182,7 +217,7 @@ def download_audio(url: str, output_dir: Path) -> DownloadResult:
     Raises:
         InvalidURLError: if the URL is not a valid YouTube URL.
         AudioDownloadError: if yt-dlp fails to download (video unavailable,
-            network error, etc.).
+            network error, gate page, etc.).
     """
     # Validate URL up front so we fail fast with a clear error.
     video_id = extract_video_id(url)
@@ -214,6 +249,23 @@ def download_audio(url: str, output_dir: Path) -> DownloadResult:
             # triggers the download. We use this rather than ydl.download()
             # because it gives us the title.
             info = ydl.extract_info(url, download=True)
+
+            # Heuristic gate-page detection. yt-dlp won't always raise
+            # on a YouTube consent / sign-in page — it just returns an
+            # info_dict with a bogus id and title. The "file not found"
+            # check below would eventually catch that, but with a much
+            # less actionable error message.
+            if _looks_like_gate_page(info):
+                bogus_title = info.get("title") or "<unknown>"
+                bogus_id = info.get("id") or "<unknown>"
+                raise AudioDownloadError(
+                    f"yt-dlp returned a YouTube gate page instead of the "
+                    f"video (title={bogus_title!r}, id={bogus_id!r}). "
+                    f"YouTube is blocking the download. Try setting "
+                    f"cookies via yt-dlp, or use --prefer-captions to "
+                    f"get the transcript without downloading audio."
+                )
+
             title = info.get("title") or video_id
             # After FFmpegExtractAudio, the file lives at the same path
             # with .m4a extension (preferredcodec).
