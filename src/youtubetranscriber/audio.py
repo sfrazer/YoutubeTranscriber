@@ -7,6 +7,7 @@ Pure functions: extract_video_id()
 
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,6 +63,39 @@ class DownloadResult:
     video_id: str
 
 
+def _normalize_url(url: str) -> str:
+    """Normalize a URL pasted from a browser/clipboard before parsing.
+
+    Four classes of fix-up that a user pasting into a terminal hits:
+        - Surrounding quote characters survive bracketed-paste
+          (mostly with zsh/fish, less so with bash).
+        - Shell-escaped metacharacters: some zsh configurations
+          insert a backslash before characters like '?' and '='
+          when a URL is pasted. The user copies a normal watch URL
+          but the paste buffer arrives with backslashes inserted
+          before '?' and '=' (because zsh treats them as
+          glob/history-expansion characters).
+        - HTML-entity-encoded ampersands from URLs copied out of
+          rendered HTML (Firefox used to do this in some paths).
+        - Leading/trailing whitespace from select-and-paste that
+          grabbed an extra space or newline from the address bar.
+
+    We deliberately do NOT try to fix other classes of malformed
+    URLs (wrong scheme, missing host, etc.) — those should fail
+    with a clear error so the user notices, not be silently
+    corrected.
+    """
+    normalized = url.strip().strip('"').strip("'").strip()
+    # Strip a backslash that is followed by something that isn't a
+    # 'safe' URL character. This mirrors the set of characters that
+    # shells typically escape, and leaves any legitimate backslashes
+    # alone (which in YouTube URLs would have to be percent-encoded
+    # as %5C anyway, so this is safe in practice).
+    normalized = re.sub(r"\\([^a-zA-Z0-9._/:])", r"\1", normalized)
+    normalized = html.unescape(normalized)
+    return normalized
+
+
 def extract_video_id(url: str) -> str:
     """Parse a YouTube URL and return the 11-character video ID.
 
@@ -73,6 +107,8 @@ def extract_video_id(url: str) -> str:
         - https://m.youtube.com/watch?v=ID
         - http:// (not just https://)
         - Extra query params (e.g. &t=42s)
+        - URLs pasted with surrounding quotes or HTML-entity ampersands
+          (normalized before parsing — see _normalize_url)
 
     Raises:
         InvalidURLError: if the URL is not a recognized YouTube URL or
@@ -80,6 +116,8 @@ def extract_video_id(url: str) -> str:
     """
     if not url or not isinstance(url, str):
         raise InvalidURLError(f"URL must be a non-empty string, got: {url!r}")
+
+    url = _normalize_url(url)
 
     # Normalize: must contain "youtube" or be a youtu.be short link
     lowered = url.lower()

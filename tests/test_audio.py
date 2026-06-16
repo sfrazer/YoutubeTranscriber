@@ -45,6 +45,59 @@ def test_extract_video_id_valid(url: str, expected: str) -> None:
     assert extract_video_id(url) == expected
 
 
+# --- paste normalization ---------------------------------------------------
+# Real-world cases where the URL arrives wrapped in shell metacharacters
+# (surrounding quotes from zsh bracketed-paste), with leading/trailing
+# whitespace (from a select-and-paste that grabbed an extra space), or
+# with HTML-entity ampersands (Firefox quirk when copying from rendered
+# HTML). All should be normalized to the same canonical ID.
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        # Surrounding double quotes
+        ('"https://www.youtube.com/watch?v=dQw4w9WgXcQ"', "dQw4w9WgXcQ"),
+        ('"https://youtu.be/dQw4w9WgXcQ"', "dQw4w9WgXcQ"),
+        # Surrounding single quotes
+        ("'https://www.youtube.com/watch?v=dQw4w9WgXcQ'", "dQw4w9WgXcQ"),
+        # Trailing whitespace
+        ("https://youtu.be/dQw4w9WgXcQ ", "dQw4w9WgXcQ"),
+        ("https://youtu.be/dQw4w9WgXcQ  ", "dQw4w9WgXcQ"),
+        # Leading whitespace
+        (" https://youtu.be/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        # Leading and trailing whitespace
+        ("  https://youtu.be/dQw4w9WgXcQ  ", "dQw4w9WgXcQ"),
+        # Leading newline (common from copy of address bar)
+        ("\nhttps://youtu.be/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        # HTML-entity ampersand on a watch URL (the ?v= is matched
+        # before the unescaped &t= is even reached)
+        (
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&amp;t=42s",
+            "dQw4w9WgXcQ",
+        ),
+        # Shell-escaped metacharacters: zsh can insert a backslash
+        # before '?' and '=' on paste. Reported in the wild.
+        (
+            "https://www.youtube.com/watch\\?v\\=wykPErJ8M-8",
+            "wykPErJ8M-8",
+        ),
+        # Escaped '&' (also shell-glob-adjacent in some configs)
+        (
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ\\&t=42s",
+            "dQw4w9WgXcQ",
+        ),
+        # Mixed: shell-escaped '?' and HTML-entity '&' together
+        (
+            "https://www.youtube.com/watch\\?v=dQw4w9WgXcQ&amp;t=42s",
+            "dQw4w9WgXcQ",
+        ),
+    ],
+)
+def test_extract_video_id_normalizes_paste_artifacts(url: str, expected: str) -> None:
+    assert extract_video_id(url) == expected
+
+
 @pytest.mark.parametrize(
     "url",
     [
