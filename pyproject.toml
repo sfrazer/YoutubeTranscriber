@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "CLI tool for transcribing and summarizing YouTube videos"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-license = { text = "TBD" }
+license = { text = "MIT" }
 authors = [
     { name = "Scott Frazer", email = "s.frazer@gmail.com" },
 ]

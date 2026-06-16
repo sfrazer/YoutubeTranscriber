@@ -218,4 +218,4 @@ For `uv` setup, see [`docs/uv.md`](docs/uv.md).
 
 ## License
 
-TBD
+[MIT](LICENSE) © 2026 Scott Frazer
