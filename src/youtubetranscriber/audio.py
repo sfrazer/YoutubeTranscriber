@@ -143,11 +143,67 @@ def extract_video_id(url: str) -> str:
     raise InvalidURLError(f"Could not extract video ID from: {url!r}")
 
 
-def get_video_info(url: str) -> VideoInfo:
+# Supported browser names for --yt-cookies-from-browser. Mirrors the
+# set yt-dlp accepts in its 'cookiesfrombrowser' option. Validated
+# at the CLI layer so users get a clean BadParameter instead of a
+# confusing yt-dlp error from deep inside the cookie-loading code.
+SUPPORTED_COOKIE_BROWSERS = frozenset(
+    {
+        "chrome",
+        "chromium",
+        "firefox",
+        "safari",
+        "opera",
+        "edge",
+        "brave",
+        "vivaldi",
+        "whale",
+    }
+)
+
+
+def _apply_cookie_options(
+    opts: dict,
+    cookies_from_browser: str | None,
+    cookies_file: Path | None,
+) -> None:
+    """Inject cookie options into a yt-dlp opts dict in place.
+
+    yt-dlp's Python API uses different shapes for the two options
+    than the string args the user passes on the CLI:
+      - 'cookiesfrombrowser' is a tuple, e.g. ('firefox',) or
+        ('firefox', 'profile', 'default-release').
+      - 'cookiefile' is a string path (or Path; yt-dlp str()s it).
+
+    We accept the simple string forms and convert at the boundary.
+    """
+    if cookies_from_browser is not None:
+        # yt-dlp expects a tuple; we accept a single browser name.
+        opts["cookiesfrombrowser"] = (cookies_from_browser,)
+    if cookies_file is not None:
+        opts["cookiefile"] = str(cookies_file)
+
+
+def get_video_info(
+    url: str,
+    *,
+    cookies_from_browser: str | None = None,
+    cookies_file: Path | None = None,
+) -> VideoInfo:
     """Fetch video metadata (title, id) without downloading the media.
 
     Cheaper than download_audio() — useful when you want to decide
     where to put files before committing to a download.
+
+    Args:
+        url: YouTube video URL.
+        cookies_from_browser: Optional browser name (e.g. "firefox")
+            from which to read YouTube session cookies. Use this when
+            YouTube returns a consent / sign-in gate page.
+        cookies_file: Optional path to a Netscape-format cookies.txt
+            file. Use as an alternative to cookies_from_browser when
+            browser-cookie access is not available (e.g. keychain
+            denied on macOS).
 
     Raises:
         InvalidURLError: if the URL is malformed.
@@ -161,6 +217,7 @@ def get_video_info(url: str) -> VideoInfo:
         # only fetches the metadata.
         "skip_download": True,
     }
+    _apply_cookie_options(opts, cookies_from_browser, cookies_file)
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -207,12 +264,27 @@ def _looks_like_gate_page(info: dict) -> bool:
     return any(phrase in title for phrase in gate_phrases)
 
 
-def download_audio(url: str, output_dir: Path) -> DownloadResult:
+def download_audio(
+    url: str,
+    output_dir: Path,
+    *,
+    cookies_from_browser: str | None = None,
+    cookies_file: Path | None = None,
+) -> DownloadResult:
     """Download audio only from a YouTube URL to output_dir.
 
     Returns a DownloadResult containing the path to the .m4a file and
     the video's title and ID. The file will be named
     "<video title> [<video_id>].m4a" by default.
+
+    Args:
+        url: YouTube video URL.
+        output_dir: Directory to write the .m4a into.
+        cookies_from_browser: Optional browser name (e.g. "firefox")
+            from which to read YouTube session cookies. Use this when
+            YouTube returns a consent / sign-in gate page.
+        cookies_file: Optional path to a Netscape-format cookies.txt
+            file. Use as an alternative to cookies_from_browser.
 
     Raises:
         InvalidURLError: if the URL is not a valid YouTube URL.
@@ -242,6 +314,7 @@ def download_audio(url: str, output_dir: Path) -> DownloadResult:
         "quiet": True,
         "no_warnings": True,
     }
+    _apply_cookie_options(opts, cookies_from_browser, cookies_file)
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -261,9 +334,11 @@ def download_audio(url: str, output_dir: Path) -> DownloadResult:
                 raise AudioDownloadError(
                     f"yt-dlp returned a YouTube gate page instead of the "
                     f"video (title={bogus_title!r}, id={bogus_id!r}). "
-                    f"YouTube is blocking the download. Try setting "
-                    f"cookies via yt-dlp, or use --prefer-captions to "
-                    f"get the transcript without downloading audio."
+                    f"YouTube is blocking the download. Try "
+                    f"--yt-cookies-from-browser firefox (or another browser "
+                    f"you're logged into YouTube with), or use "
+                    f"--prefer-captions to get the transcript without "
+                    f"downloading audio."
                 )
 
             title = info.get("title") or video_id

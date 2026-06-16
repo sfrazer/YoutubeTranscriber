@@ -994,3 +994,167 @@ def test_captions_path_does_not_error_on_audio_cleanup(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.stderr
     # The cleanup should not have failed; transcript exists
     assert (tmp_path / "Sample Video" / "dQw4w9WgXcQ.txt").exists()
+
+
+# --- --yt-cookies-from-browser / --yt-cookies-file -------------------------
+
+
+def test_yt_cookies_from_browser_rejects_unknown_browser(tmp_path: Path) -> None:
+    """An unsupported browser name should fail at argument parsing."""
+    with patch("youtubetranscriber.cli.audio.get_video_info") as info_mock:
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--yt-cookies-from-browser",
+                "netscape",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert not info_mock.called
+    # typer's BadParameter includes the unknown name and the list
+    combined = ((result.output or "") + (result.stderr or "")).replace("\n", " ")
+    assert "netscape" in combined
+    assert "firefox" in combined  # at least one supported browser is named
+
+
+def test_yt_cookies_from_browser_accepts_firefox(tmp_path: Path) -> None:
+    """A supported browser name should reach audio.get_video_info."""
+    fake_audio = _fake_audio_result(tmp_path)
+
+    with (
+        patch(
+            "youtubetranscriber.cli.audio.get_video_info",
+            return_value=_fake_info(),
+        ) as info_mock,
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=[]),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--yt-cookies-from-browser",
+                "firefox",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stderr
+    # The cookie option should be plumbed into get_video_info
+    assert info_mock.call_args.kwargs.get("cookies_from_browser") == "firefox"
+
+
+def test_yt_cookies_file_rejects_missing_path(tmp_path: Path) -> None:
+    """A missing cookie file should fail at argument parsing."""
+    missing = tmp_path / "no_such_cookies.txt"
+
+    with patch("youtubetranscriber.cli.audio.get_video_info") as info_mock:
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--yt-cookies-file",
+                str(missing),
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert not info_mock.called
+    combined = ((result.output or "") + (result.stderr or "")).replace("\n", " ")
+    assert "cookie" in combined.lower()
+    assert "not found" in combined.lower()
+
+
+def test_yt_cookies_file_rejects_directory(tmp_path: Path) -> None:
+    """A directory path should fail at argument parsing."""
+    not_a_file = tmp_path / "a_directory"
+    not_a_file.mkdir()
+
+    with patch("youtubetranscriber.cli.audio.get_video_info") as info_mock:
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--yt-cookies-file",
+                str(not_a_file),
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert not info_mock.called
+
+
+def test_yt_cookies_file_accepts_existing_file(tmp_path: Path) -> None:
+    """An existing cookie file should reach audio.get_video_info."""
+    fake_audio = _fake_audio_result(tmp_path)
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n")
+
+    with (
+        patch(
+            "youtubetranscriber.cli.audio.get_video_info",
+            return_value=_fake_info(),
+        ) as info_mock,
+        patch("youtubetranscriber.cli.audio.download_audio", return_value=fake_audio),
+        patch("youtubetranscriber.cli.do_transcribe", return_value=[]),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--yt-cookies-file",
+                str(cookies),
+            ],
+        )
+
+    assert result.exit_code == 0, result.stderr
+    assert info_mock.call_args.kwargs.get("cookies_file") == cookies
+
+
+def test_yt_cookies_plumbed_to_both_yt_dlp_calls(tmp_path: Path) -> None:
+    """The cookie options should reach BOTH get_video_info and download_audio.
+
+    Both yt-dlp calls need cookies — get_video_info (to fetch the
+    title for the output directory) and download_audio (the actual
+    fetch). If only one of them has cookies, the behavior is
+    inconsistent.
+    """
+    fake_audio = _fake_audio_result(tmp_path)
+
+    with (
+        patch(
+            "youtubetranscriber.cli.audio.get_video_info",
+            return_value=_fake_info(),
+        ) as info_mock,
+        patch(
+            "youtubetranscriber.cli.audio.download_audio",
+            return_value=fake_audio,
+        ) as dl_mock,
+        patch("youtubetranscriber.cli.do_transcribe", return_value=[]),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://youtu.be/dQw4w9WgXcQ",
+                "--output-dir",
+                str(tmp_path),
+                "--yt-cookies-from-browser",
+                "firefox",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stderr
+    assert info_mock.call_args.kwargs.get("cookies_from_browser") == "firefox"
+    assert dl_mock.call_args.kwargs.get("cookies_from_browser") == "firefox"
+

@@ -23,7 +23,12 @@ from pathlib import Path
 import typer
 
 from youtubetranscriber import audio, captions, diarize, merge, output, paths, progress, summarize
-from youtubetranscriber.audio import AudioDownloadError, InvalidURLError, VideoInfo
+from youtubetranscriber.audio import (
+    SUPPORTED_COOKIE_BROWSERS,
+    AudioDownloadError,
+    InvalidURLError,
+    VideoInfo,
+)
 from youtubetranscriber.diarize import HfTokenMissingError
 from youtubetranscriber.summarize import OllamaApiKeyMissingError, SummarizationError
 from youtubetranscriber.transcribe import VALID_MODELS, TranscriptSegment, WhisperModelError
@@ -84,6 +89,42 @@ def _validate_summary_prompt(value: Path | None) -> Path | None:
         raise typer.BadParameter(f"Summary prompt file not found: {value}")
     if not value.is_file():
         raise typer.BadParameter(f"Summary prompt path is not a file: {value}")
+    return value
+
+
+def _validate_cookie_browser(value: str | None) -> str | None:
+    """Validate --yt-cookies-from-browser against yt-dlp's supported set.
+
+    yt-dlp raises a confusing error from deep inside its cookie-loader
+    code if an unknown browser name is passed. Validating up front
+    gives the user a clean BadParameter message at argument-parsing
+    time, before any network IO.
+
+    The callback receives None when the option is not supplied (the
+    default), so we short-circuit before touching the constant.
+    """
+    if value is None:
+        return None
+    if value not in SUPPORTED_COOKIE_BROWSERS:
+        supported = ", ".join(sorted(SUPPORTED_COOKIE_BROWSERS))
+        raise typer.BadParameter(
+            f"Unknown browser {value!r}. Supported: {supported}"
+        )
+    return value
+
+
+def _validate_cookie_file(value: Path | None) -> Path | None:
+    """Validate --yt-cookies-file exists at parse time.
+
+    Mirrors _validate_summary_prompt: a missing file should fail
+    at argument parsing, not from deep inside the download.
+    """
+    if value is None:
+        return None
+    if not value.exists():
+        raise typer.BadParameter(f"Cookie file not found: {value}")
+    if not value.is_file():
+        raise typer.BadParameter(f"Cookie path is not a file: {value}")
     return value
 
 
@@ -151,6 +192,31 @@ def transcribe(
         "--prefer-captions/--no-prefer-captions",
         help=("Try YouTube auto-captions first; fall back to Whisper if unavailable."),
     ),
+    yt_cookies_from_browser: str | None = typer.Option(
+        None,
+        "--yt-cookies-from-browser",
+        help=(
+            "Read YouTube session cookies from a browser's cookie store. "
+            "Use this when YouTube returns a consent / sign-in gate "
+            "page (e.g. 'Press Subscribe to continue'). Examples: "
+            "firefox, chrome, safari, brave. On macOS, the first run "
+            "prompts for keychain access to the browser's encrypted "
+            "cookie database."
+        ),
+        callback=_validate_cookie_browser,
+    ),
+    yt_cookies_file: Path | None = typer.Option(  # noqa: B008  (Typer idiom)
+        None,
+        "--yt-cookies-file",
+        help=(
+            "Path to a Netscape-format cookies.txt file containing "
+            "YouTube session cookies. Use as an alternative to "
+            "--yt-cookies-from-browser when browser-cookie access "
+            "is not available (e.g. keychain denied on macOS). Export "
+            "from Firefox with the 'cookies.txt' extension."
+        ),
+        callback=_validate_cookie_file,
+    ),
     output_dir: Path = typer.Option(  # noqa: B008  (Typer idiom: option must be a default-arg call)
         DEFAULT_OUTPUT_DIR,
         "--output-dir",
@@ -188,6 +254,8 @@ def transcribe(
             format=format,
             output_dir=output_dir,
             prefer_captions=prefer_captions,
+            yt_cookies_from_browser=yt_cookies_from_browser,
+            yt_cookies_file=yt_cookies_file,
             diarize_flag=diarize_flag,
             num_speakers=num_speakers,
             min_speakers=min_speakers,
@@ -217,6 +285,8 @@ def _run_pipeline(
     format: str,
     output_dir: Path,
     prefer_captions: bool,
+    yt_cookies_from_browser: str | None,
+    yt_cookies_file: Path | None,
     diarize_flag: bool,
     num_speakers: int | None,
     min_speakers: int | None,
@@ -235,7 +305,11 @@ def _run_pipeline(
         _status(f"[ytx] Output root: {output_dir}")
 
     with progress.step_progress(f"Fetching video info from {url}"):
-        info = audio.get_video_info(url)
+        info = audio.get_video_info(
+            url,
+            cookies_from_browser=yt_cookies_from_browser,
+            cookies_file=yt_cookies_file,
+        )
     _status(f"[ytx] Title: {info.title}")
 
     work_dir = paths.resolve_unique_dir(output_dir, info.title, interactive=interactive)
@@ -250,6 +324,8 @@ def _run_pipeline(
         work_dir=work_dir,
         model=model,
         prefer_captions=prefer_captions,
+        yt_cookies_from_browser=yt_cookies_from_browser,
+        yt_cookies_file=yt_cookies_file,
         verbose=verbose,
     )
     _status(f"[ytx] Got {len(segments)} segments")
@@ -302,6 +378,8 @@ def _obtain_segments(
     work_dir: Path,
     model: str,
     prefer_captions: bool,
+    yt_cookies_from_browser: str | None,
+    yt_cookies_file: Path | None,
     verbose: bool,
 ) -> tuple[list[TranscriptSegment], Path | None]:
     """Get transcript segments and the audio path that produced them.
@@ -324,7 +402,12 @@ def _obtain_segments(
             _status(f"[ytx] Captions unavailable: {e}")
             _status("[ytx] Falling back to Whisper")
     with progress.step_progress("Downloading audio"):
-        result = audio.download_audio(url, work_dir)
+        result = audio.download_audio(
+            url,
+            work_dir,
+            cookies_from_browser=yt_cookies_from_browser,
+            cookies_file=yt_cookies_file,
+        )
     _status(f"[ytx] Audio saved to: {result.path}")
 
     # Enable faster-whisper's internal tqdm progress for segment-level
