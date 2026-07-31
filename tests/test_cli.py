@@ -1158,3 +1158,145 @@ def test_yt_cookies_plumbed_to_both_yt_dlp_calls(tmp_path: Path) -> None:
     assert info_mock.call_args.kwargs.get("cookies_from_browser") == "firefox"
     assert dl_mock.call_args.kwargs.get("cookies_from_browser") == "firefox"
 
+
+# --- Local audio file (--audio-file) ---------------------------------------
+
+
+def _fake_local_audio(tmp_path: Path, name: str = "meeting.m4a") -> Path:
+    audio = tmp_path / name
+    audio.write_bytes(b"fake audio")
+    return audio
+
+
+def test_audio_file_transcribes_local_file_without_yt_dlp(tmp_path: Path) -> None:
+    """--audio-file transcribes a local file and never touches yt-dlp."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    audio = _fake_local_audio(tmp_path)
+    fake_segments = [TranscriptSegment(text="Local hello.", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.audio.get_video_info") as info_mock,
+        patch("youtubetranscriber.cli.audio.download_audio") as dl_mock,
+        patch(
+            "youtubetranscriber.cli.do_transcribe", return_value=fake_segments
+        ) as transcribe_mock,
+    ):
+        result = runner.invoke(
+            app,
+            ["--audio-file", str(audio), "--output-dir", str(tmp_path)],
+        )
+
+    assert result.exit_code == 0, result.stderr
+    # No YouTube network calls at all.
+    info_mock.assert_not_called()
+    dl_mock.assert_not_called()
+    # The local file is what got transcribed.
+    assert transcribe_mock.call_args.args[0] == audio
+    # Output dir + file are named after the filename stem.
+    out_file = tmp_path / "meeting" / "meeting.txt"
+    assert out_file.exists()
+    assert "Local hello." in out_file.read_text()
+
+
+def test_audio_file_is_never_deleted(tmp_path: Path) -> None:
+    """A user-supplied audio file must survive even without --keep-audio."""
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    audio = _fake_local_audio(tmp_path)
+    fake_segments = [TranscriptSegment(text="x", start=0.0, end=1.0)]
+
+    with patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments):
+        result = runner.invoke(
+            app,
+            ["--audio-file", str(audio), "--output-dir", str(tmp_path)],
+        )
+
+    assert result.exit_code == 0, result.stderr
+    assert audio.exists()
+
+
+def test_audio_file_missing_rejected(tmp_path: Path) -> None:
+    """A non-existent --audio-file fails at parse time, no traceback."""
+    result = runner.invoke(
+        app,
+        ["--audio-file", str(tmp_path / "nope.m4a"), "--output-dir", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    assert "Audio file not found" in result.output
+
+
+def test_audio_file_and_url_together_rejected(tmp_path: Path) -> None:
+    """Providing both a URL and --audio-file is a clean usage error."""
+    audio = _fake_local_audio(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "https://youtu.be/dQw4w9WgXcQ",
+            "--audio-file",
+            str(audio),
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "not both" in result.output
+
+
+def test_no_source_rejected(tmp_path: Path) -> None:
+    """Neither URL nor --audio-file is a clean usage error."""
+    result = runner.invoke(app, ["--output-dir", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "Provide a YouTube URL or --audio-file" in result.output
+
+
+def test_audio_file_with_youtube_only_flag_rejected(tmp_path: Path) -> None:
+    """YouTube-only flags can't be combined with --audio-file."""
+    audio = _fake_local_audio(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "--audio-file",
+            str(audio),
+            "--prefer-captions",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--prefer-captions" in result.output
+
+
+def test_audio_file_supports_diarization(tmp_path: Path) -> None:
+    """--audio-file works with --diarize (the local file feeds pyannote)."""
+    from youtubetranscriber.merge import SpeakerSpan
+    from youtubetranscriber.transcribe import TranscriptSegment
+
+    audio = _fake_local_audio(tmp_path)
+    fake_segments = [TranscriptSegment(text="Hi.", start=0.0, end=1.0)]
+    fake_spans = [SpeakerSpan(speaker="SPEAKER_00", start=0.0, end=1.0)]
+
+    with (
+        patch("youtubetranscriber.cli.do_transcribe", return_value=fake_segments),
+        patch("youtubetranscriber.cli.diarize.diarize", return_value=fake_spans) as diar_mock,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "--audio-file",
+                str(audio),
+                "--diarize",
+                "--num-speakers",
+                "2",
+                "--output-dir",
+                str(tmp_path),
+            ],
+        )
+
+    assert result.exit_code == 0, result.stderr
+    # Diarization ran on the user's file with the speaker hint.
+    assert diar_mock.call_args.args[0] == audio
+    assert diar_mock.call_args.kwargs.get("num_speakers") == 2
+    out_file = tmp_path / "meeting" / "meeting.txt"
+    assert "[SPEAKER_00] Hi." in out_file.read_text()
+

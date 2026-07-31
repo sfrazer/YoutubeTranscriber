@@ -63,6 +63,12 @@ uv run ytx "URL" --format srt
 # JSON output (includes video_id, title, segments with timestamps)
 uv run ytx "URL" --format json
 
+# Transcribe a local audio file instead of a YouTube URL
+uv run ytx --audio-file recording.m4a
+
+# Separate two speakers in a local recording
+uv run ytx --audio-file interview.m4a --diarize --num-speakers 2
+
 # Use YouTube's auto-captions instead of Whisper (fast, less accurate)
 uv run ytx "URL" --prefer-captions
 
@@ -79,6 +85,9 @@ uv run ytx "URL" --diarize --summarize --format json
 ### All flags
 
 ```
+--audio-file          Transcribe a local audio file (m4a, wav, mp3, ...)
+                      instead of a YouTube URL. Skips yt-dlp; the file is
+                      never deleted. Omit the URL when using this.
 --model, -m           Whisper model size (tiny, base, small, medium, large-v3)
                       Default: medium
 --format, -f          Output format: txt, srt, json
