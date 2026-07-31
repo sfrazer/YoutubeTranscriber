@@ -296,3 +296,106 @@ def test_download_audio_uses_m4a_format(tmp_path: Path) -> None:
     # We should be running an audio-only postprocessor
     postprocessors = params.get("postprocessors", [])
     assert any(p.get("key") == "FFmpegExtractAudio" for p in postprocessors)
+
+
+# --- cookie options --------------------------------------------------------
+
+
+def test_get_video_info_passes_cookies_from_browser(tmp_path: Path) -> None:
+    """get_video_info should plumb cookiesfrombrowser into yt-dlp's opts."""
+    fake_ydl = MagicMock()
+    fake_ydl_class = MagicMock(return_value=fake_ydl)
+    fake_ydl_class.return_value.__enter__.return_value.extract_info.return_value = {
+        "id": "dQw4w9WgXcQ",
+        "title": "Some Video",
+    }
+
+    with patch("youtubetranscriber.audio.yt_dlp.YoutubeDL", fake_ydl_class) as ydl_cls:
+        get_video_info(
+            "https://youtu.be/dQw4w9WgXcQ",
+            cookies_from_browser="firefox",
+        )
+
+    params = ydl_cls.call_args.args[0]
+    # yt-dlp expects a tuple for cookiesfrombrowser
+    assert params.get("cookiesfrombrowser") == ("firefox",)
+
+
+def test_download_audio_passes_cookies_from_browser(tmp_path: Path) -> None:
+    """download_audio should plumb cookiesfrombrowser into yt-dlp's opts."""
+    expected_path = tmp_path / "Some Video [dQw4w9WgXcQ].m4a"
+    fake_ydl = MagicMock()
+    fake_ydl_class = MagicMock(return_value=fake_ydl)
+    fake_ydl_class.return_value.__enter__.return_value.prepare_filename.return_value = str(
+        expected_path.with_suffix("")
+    )
+    fake_ydl_class.return_value.__enter__.return_value.extract_info.return_value = {
+        "id": "dQw4w9WgXcQ",
+        "title": "Some Video",
+    }
+
+    with patch("youtubetranscriber.audio.yt_dlp.YoutubeDL", fake_ydl_class) as ydl_cls:
+        expected_path.write_bytes(b"fake")
+        download_audio(
+            "https://youtu.be/dQw4w9WgXcQ",
+            tmp_path,
+            cookies_from_browser="firefox",
+        )
+
+    params = ydl_cls.call_args.args[0]
+    assert params.get("cookiesfrombrowser") == ("firefox",)
+
+
+def test_download_audio_passes_cookies_file(tmp_path: Path) -> None:
+    """download_audio should plumb cookiefile into yt-dlp's opts."""
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n")
+
+    expected_path = tmp_path / "Some Video [dQw4w9WgXcQ].m4a"
+    fake_ydl = MagicMock()
+    fake_ydl_class = MagicMock(return_value=fake_ydl)
+    fake_ydl_class.return_value.__enter__.return_value.prepare_filename.return_value = str(
+        expected_path.with_suffix("")
+    )
+    fake_ydl_class.return_value.__enter__.return_value.extract_info.return_value = {
+        "id": "dQw4w9WgXcQ",
+        "title": "Some Video",
+    }
+
+    with patch("youtubetranscriber.audio.yt_dlp.YoutubeDL", fake_ydl_class) as ydl_cls:
+        expected_path.write_bytes(b"fake")
+        download_audio(
+            "https://youtu.be/dQw4w9WgXcQ",
+            tmp_path,
+            cookies_file=cookies,
+        )
+
+    params = ydl_cls.call_args.args[0]
+    # yt-dlp expects a string path for cookiefile
+    assert params.get("cookiefile") == str(cookies)
+
+
+def test_download_audio_no_cookie_options_by_default(tmp_path: Path) -> None:
+    """Without explicit cookie kwargs, neither option is set.
+
+    Negative test: make sure the default is no cookie config,
+    not an accidental empty tuple or empty string.
+    """
+    expected_path = tmp_path / "Some Video [dQw4w9WgXcQ].m4a"
+    fake_ydl = MagicMock()
+    fake_ydl_class = MagicMock(return_value=fake_ydl)
+    fake_ydl_class.return_value.__enter__.return_value.prepare_filename.return_value = str(
+        expected_path.with_suffix("")
+    )
+    fake_ydl_class.return_value.__enter__.return_value.extract_info.return_value = {
+        "id": "dQw4w9WgXcQ",
+        "title": "Some Video",
+    }
+
+    with patch("youtubetranscriber.audio.yt_dlp.YoutubeDL", fake_ydl_class) as ydl_cls:
+        expected_path.write_bytes(b"fake")
+        download_audio("https://youtu.be/dQw4w9WgXcQ", tmp_path)
+
+    params = ydl_cls.call_args.args[0]
+    assert "cookiesfrombrowser" not in params
+    assert "cookiefile" not in params

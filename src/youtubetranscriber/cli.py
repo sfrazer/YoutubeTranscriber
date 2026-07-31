@@ -23,7 +23,12 @@ from pathlib import Path
 import typer
 
 from youtubetranscriber import audio, captions, diarize, merge, output, paths, progress, summarize
-from youtubetranscriber.audio import AudioDownloadError, InvalidURLError, VideoInfo
+from youtubetranscriber.audio import (
+    SUPPORTED_COOKIE_BROWSERS,
+    AudioDownloadError,
+    InvalidURLError,
+    VideoInfo,
+)
 from youtubetranscriber.diarize import HfTokenMissingError
 from youtubetranscriber.summarize import OllamaApiKeyMissingError, SummarizationError
 from youtubetranscriber.transcribe import VALID_MODELS, TranscriptSegment, WhisperModelError
@@ -87,9 +92,79 @@ def _validate_summary_prompt(value: Path | None) -> Path | None:
     return value
 
 
+def _validate_cookie_browser(value: str | None) -> str | None:
+    """Validate --yt-cookies-from-browser against yt-dlp's supported set.
+
+    yt-dlp raises a confusing error from deep inside its cookie-loader
+    code if an unknown browser name is passed. Validating up front
+    gives the user a clean BadParameter message at argument-parsing
+    time, before any network IO.
+
+    The callback receives None when the option is not supplied (the
+    default), so we short-circuit before touching the constant.
+    """
+    if value is None:
+        return None
+    if value not in SUPPORTED_COOKIE_BROWSERS:
+        supported = ", ".join(sorted(SUPPORTED_COOKIE_BROWSERS))
+        raise typer.BadParameter(
+            f"Unknown browser {value!r}. Supported: {supported}"
+        )
+    return value
+
+
+def _validate_cookie_file(value: Path | None) -> Path | None:
+    """Validate --yt-cookies-file exists at parse time.
+
+    Mirrors _validate_summary_prompt: a missing file should fail
+    at argument parsing, not from deep inside the download.
+    """
+    if value is None:
+        return None
+    if not value.exists():
+        raise typer.BadParameter(f"Cookie file not found: {value}")
+    if not value.is_file():
+        raise typer.BadParameter(f"Cookie path is not a file: {value}")
+    return value
+
+
+def _validate_audio_file(value: Path | None) -> Path | None:
+    """Validate --audio-file exists at parse time.
+
+    Mirrors _validate_cookie_file: a missing local audio file should
+    fail at argument parsing with a clean BadParameter, not from deep
+    inside transcribe() as a FileNotFoundError traceback.
+    """
+    if value is None:
+        return None
+    if not value.exists():
+        raise typer.BadParameter(f"Audio file not found: {value}")
+    if not value.is_file():
+        raise typer.BadParameter(f"Audio path is not a file: {value}")
+    return value
+
+
 @app.command()
 def transcribe(
-    url: str = typer.Argument(..., help="YouTube video URL"),
+    url: str | None = typer.Argument(
+        None,
+        help=(
+            "YouTube video URL. Omit when using --audio-file to "
+            "transcribe a local audio file instead."
+        ),
+    ),
+    audio_file: Path | None = typer.Option(  # noqa: B008  (Typer idiom)
+        None,
+        "--audio-file",
+        help=(
+            "Path to a local audio file (m4a, wav, mp3, etc.) to "
+            "transcribe instead of downloading from YouTube. Skips "
+            "yt-dlp entirely; mutually exclusive with a URL and with "
+            "the YouTube-only flags (--prefer-captions, "
+            "--yt-cookies-*). The file is never deleted."
+        ),
+        callback=_validate_audio_file,
+    ),
     model: str = typer.Option(
         "medium",
         "--model",
@@ -151,6 +226,31 @@ def transcribe(
         "--prefer-captions/--no-prefer-captions",
         help=("Try YouTube auto-captions first; fall back to Whisper if unavailable."),
     ),
+    yt_cookies_from_browser: str | None = typer.Option(
+        None,
+        "--yt-cookies-from-browser",
+        help=(
+            "Read YouTube session cookies from a browser's cookie store. "
+            "Use this when YouTube returns a consent / sign-in gate "
+            "page (e.g. 'Press Subscribe to continue'). Examples: "
+            "firefox, chrome, safari, brave. On macOS, the first run "
+            "prompts for keychain access to the browser's encrypted "
+            "cookie database."
+        ),
+        callback=_validate_cookie_browser,
+    ),
+    yt_cookies_file: Path | None = typer.Option(  # noqa: B008  (Typer idiom)
+        None,
+        "--yt-cookies-file",
+        help=(
+            "Path to a Netscape-format cookies.txt file containing "
+            "YouTube session cookies. Use as an alternative to "
+            "--yt-cookies-from-browser when browser-cookie access "
+            "is not available (e.g. keychain denied on macOS). Export "
+            "from Firefox with the 'cookies.txt' extension."
+        ),
+        callback=_validate_cookie_file,
+    ),
     output_dir: Path = typer.Option(  # noqa: B008  (Typer idiom: option must be a default-arg call)
         DEFAULT_OUTPUT_DIR,
         "--output-dir",
@@ -180,14 +280,24 @@ def transcribe(
         help="Enable verbose logging.",
     ),
 ) -> None:
-    """Transcribe a YouTube video to text."""
+    """Transcribe a YouTube video (or a local audio file) to text."""
+    _validate_source(
+        url=url,
+        audio_file=audio_file,
+        prefer_captions=prefer_captions,
+        yt_cookies_from_browser=yt_cookies_from_browser,
+        yt_cookies_file=yt_cookies_file,
+    )
     try:
         _run_pipeline(
             url=url,
+            audio_file=audio_file,
             model=model,
             format=format,
             output_dir=output_dir,
             prefer_captions=prefer_captions,
+            yt_cookies_from_browser=yt_cookies_from_browser,
+            yt_cookies_file=yt_cookies_file,
             diarize_flag=diarize_flag,
             num_speakers=num_speakers,
             min_speakers=min_speakers,
@@ -210,13 +320,50 @@ def transcribe(
         raise typer.Exit(code=1) from e
 
 
+def _validate_source(
+    *,
+    url: str | None,
+    audio_file: Path | None,
+    prefer_captions: bool,
+    yt_cookies_from_browser: str | None,
+    yt_cookies_file: Path | None,
+) -> None:
+    """Enforce a coherent input source before any work begins.
+
+    Exactly one of URL / --audio-file must be given. The YouTube-only
+    flags are meaningless for a local file, so combining them with
+    --audio-file is a user error we reject up front rather than
+    silently ignore.
+    """
+    if url is None and audio_file is None:
+        raise typer.BadParameter("Provide a YouTube URL or --audio-file.")
+    if url is not None and audio_file is not None:
+        raise typer.BadParameter("Provide a URL or --audio-file, not both.")
+
+    if audio_file is not None:
+        youtube_only = {
+            "--prefer-captions": prefer_captions,
+            "--yt-cookies-from-browser": yt_cookies_from_browser is not None,
+            "--yt-cookies-file": yt_cookies_file is not None,
+        }
+        offending = [flag for flag, used in youtube_only.items() if used]
+        if offending:
+            raise typer.BadParameter(
+                f"{', '.join(offending)} require a YouTube URL and can't be "
+                f"used with --audio-file."
+            )
+
+
 def _run_pipeline(
     *,
-    url: str,
+    url: str | None,
+    audio_file: Path | None,
     model: str,
     format: str,
     output_dir: Path,
     prefer_captions: bool,
+    yt_cookies_from_browser: str | None,
+    yt_cookies_file: Path | None,
     diarize_flag: bool,
     num_speakers: int | None,
     min_speakers: int | None,
@@ -234,9 +381,20 @@ def _run_pipeline(
     if verbose:
         _status(f"[ytx] Output root: {output_dir}")
 
-    with progress.step_progress(f"Fetching video info from {url}"):
-        info = audio.get_video_info(url)
-    _status(f"[ytx] Title: {info.title}")
+    if audio_file is not None:
+        # Local file: no yt-dlp, no metadata to fetch. Derive a title
+        # and id from the filename stem (already filesystem-safe since
+        # it came from an existing path).
+        info = VideoInfo(title=audio_file.stem, video_id=audio_file.stem)
+        _status(f"[ytx] Audio file: {audio_file}")
+    else:
+        with progress.step_progress(f"Fetching video info from {url}"):
+            info = audio.get_video_info(
+                url,
+                cookies_from_browser=yt_cookies_from_browser,
+                cookies_file=yt_cookies_file,
+            )
+        _status(f"[ytx] Title: {info.title}")
 
     work_dir = paths.resolve_unique_dir(output_dir, info.title, interactive=interactive)
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -246,10 +404,13 @@ def _run_pipeline(
 
     segments, audio_path = _obtain_segments(
         url=url,
+        audio_file=audio_file,
         info=info,
         work_dir=work_dir,
         model=model,
         prefer_captions=prefer_captions,
+        yt_cookies_from_browser=yt_cookies_from_browser,
+        yt_cookies_file=yt_cookies_file,
         verbose=verbose,
     )
     _status(f"[ytx] Got {len(segments)} segments")
@@ -279,7 +440,10 @@ def _run_pipeline(
             prompt_path=summary_prompt,
         )
 
-    if not keep_audio and audio_path is not None:
+    # Never delete a user-supplied audio file; only clean up audio we
+    # downloaded ourselves. When --audio-file is used, audio_path IS
+    # the user's file, so guard on audio_file being None.
+    if audio_file is None and not keep_audio and audio_path is not None:
         _cleanup_audio(audio_path)
 
     return output_path
@@ -297,11 +461,14 @@ def _cleanup_audio(audio_path: Path) -> None:
 
 def _obtain_segments(
     *,
-    url: str,
+    url: str | None,
+    audio_file: Path | None,
     info: VideoInfo,
     work_dir: Path,
     model: str,
     prefer_captions: bool,
+    yt_cookies_from_browser: str | None,
+    yt_cookies_file: Path | None,
     verbose: bool,
 ) -> tuple[list[TranscriptSegment], Path | None]:
     """Get transcript segments and the audio path that produced them.
@@ -309,7 +476,15 @@ def _obtain_segments(
     Returns (segments, audio_path). The audio_path is None when segments
     came from YouTube captions (no local audio file). This matters for
     diarization, which requires a local audio file.
+
+    When audio_file is set, we transcribe it directly and skip the
+    captions/download path entirely; audio_path is the user's file.
     """
+    if audio_file is not None:
+        with progress.step_progress(f"Transcribing with model={model!r}"):
+            segments = do_transcribe(audio_file, model_name=model, log_progress=True)
+        return segments, audio_file
+
     if prefer_captions:
         try:
             _status("[ytx] Trying YouTube captions ...")
@@ -324,7 +499,12 @@ def _obtain_segments(
             _status(f"[ytx] Captions unavailable: {e}")
             _status("[ytx] Falling back to Whisper")
     with progress.step_progress("Downloading audio"):
-        result = audio.download_audio(url, work_dir)
+        result = audio.download_audio(
+            url,
+            work_dir,
+            cookies_from_browser=yt_cookies_from_browser,
+            cookies_file=yt_cookies_file,
+        )
     _status(f"[ytx] Audio saved to: {result.path}")
 
     # Enable faster-whisper's internal tqdm progress for segment-level
